@@ -109,17 +109,19 @@ The distribution is named `table-aware-chunker`, while the Python import name
 is `table_aware_chunker`. Python distribution names may contain hyphens, but
 import names must be valid Python identifiers and therefore use underscores.
 
-To use a local clone from a sibling project, activate that project's virtual
-environment and install this repository in editable mode. For example, from
-the `ket_rag` directory:
+To use a local clone from another project, activate the consuming project's
+virtual environment and install this repository by its relative path. For
+example, if the two project directories are located beside each other, run the
+following command from the consuming project's root directory:
 
 ```powershell
 python -m pip install -e ..\table_aware_chunker
 ```
 
-The consuming project can then import directly from `table_aware_chunker`. Keeping
-the installation editable means changes made in this repository become
-available without reinstalling it.
+The consuming project can then import directly from `table_aware_chunker`. The
+`-e` option installs the library in editable mode, so changes made in the local
+`table_aware_chunker` source directory become available to the consuming
+project without reinstalling the library.
 
 ## Quick Start
 
