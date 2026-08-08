@@ -12,3 +12,6 @@ dist/
 .DS_Store
 Thumbs.db
 
+example_output/
+*.class
+

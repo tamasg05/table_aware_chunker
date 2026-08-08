@@ -120,9 +120,11 @@ The consuming project can then import directly from `data_extraction`. Keeping
 the installation editable means changes made in this repository become
 available without reinstalling it.
 
-## Public API
+## Quick Start
 
-The two main entry points are:
+The two main entry points are `extract_corpus()` and `build_chunks()`. The
+following example extracts one PDF and writes structure-aware chunks beside the
+generated corpus files:
 
 ```python
 from pathlib import Path
@@ -144,9 +146,52 @@ chunks = build_chunks(
 ```
 
 `extract_corpus()` creates `blocks.json`, `corpus.txt`, and `sources.json` in a
-content-addressed corpus directory. For PDF input, the source files are copied
+dedicated corpus directory. Its 16-character name is generated deterministically
+by computing a SHA-256 hash from the source identifier, the extracted content,
+and the extraction-format version. This is an ordinary cryptographic hash
+calculation; it does not use AI or make any model calls. Using the same sources
+in the same order, with unchanged content and the same extraction version,
+therefore selects the same directory. For PDF input, the source files are copied
 under its `sources/` subdirectory. `build_chunks()` accepts either a block list
 or a path to `blocks.json` and can optionally persist `chunks.json`.
+
+A runnable version is available in `examples/extract_and_chunk_pdf.py`. By
+default, it processes `tests/artifacts/Q8.pdf`, so after installing the package
+you can run it from the repository root without arguments:
+
+```powershell
+python .\examples\extract_and_chunk_pdf.py
+```
+
+By default, the example writes the extracted corpus and `chunks.json` under
+`example_output/`. Pass a PDF path to process a different document, and use
+`--output-directory` to select a different location:
+
+```powershell
+python .\examples\extract_and_chunk_pdf.py .\path\to\document.pdf `
+    --output-directory .\another_output_directory
+```
+
+### Calling the example from Java
+
+`examples/TableExtractionExample.java` demonstrates how a Java application can
+start the Python example as a subprocess. It uses paths relative to the
+repository root and accepts the PDF path and optional output directory as
+command-line arguments, so it does not contain machine-specific directories.
+It also uses `tests/artifacts/Q8.pdf` and `example_output/` by default. From the
+repository root, compile and run it with:
+
+```powershell
+javac .\examples\TableExtractionExample.java
+java -cp .\examples TableExtractionExample
+```
+
+Pass a PDF path and output directory after the class name to override the
+defaults.
+
+The Java example automatically selects `.venv/Scripts/python.exe` on Windows or
+`.venv/bin/python` on Linux and macOS. The package must already be installed in
+that virtual environment as described under [Installation](#installation).
 
 ## How `pdfplumber` is used
 
@@ -282,11 +327,38 @@ Beautiful Soup dependencies are distributed under the MIT License.
 
 1. **Associate headings with following tables.** When a heading immediately
    introduces a table, store it in the table's `caption` or `heading_path` and
-   include it in the table's `source_text`.
+   include it in the table's `source_text`. For example, a document may contain
+   a heading followed directly by a table:
+
+   ```text
+   Audi A8 Prices
+
+   | Model | Power | Price |
+   | A8 55 TFSI | 340 LE | 41256010 HUF |
+   ```
+
+   Extracting the heading and table as unrelated blocks leaves the table without
+   its subject when it is retrieved by itself. Associating them would produce
+   table text such as:
+
+   ```text
+   Audi A8 Prices
+   Model = A8 55 TFSI; Power = 340 LE; Price = 41256010 HUF.
+   ```
+
+   A direct table title can be stored as its `caption`, while `heading_path` can
+   retain the surrounding document hierarchy. Including this information in
+   `source_text` makes the retrieved table independently understandable.
 
 2. **Suppress duplicate heading-only chunks.** If a table already retains its
    introductory heading, do not also produce an independent chunk containing
-   only the same heading.
+   only the same heading. Otherwise, the example above could produce both an
+   `Audi A8 Prices` chunk and a table chunk that already begins with `Audi A8
+   Prices`. The heading-only chunk adds no information, but it can still occupy
+   a limited retrieval position, create an unnecessary embedding or graph node,
+   and compete with the more informative table chunk. Suppression would apply
+   only when the heading has been preserved with the table; meaningful headings
+   that introduce other content would remain available.
 
 3. **Support a configurable minimum text-chunk target.** Compatible short text
    blocks could be merged to reduce retrieval and indexing overhead. Merging
