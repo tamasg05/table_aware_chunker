@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from data_extraction import build_chunks, extract_corpus
+from table_aware_chunker import build_chunks, extract_corpus
 
 
 def main() -> None:

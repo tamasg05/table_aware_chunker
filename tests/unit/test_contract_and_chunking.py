@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from data_extraction import (
+from table_aware_chunker import (
     BLOCKS_SCHEMA_VERSION,
     CHUNKS_SCHEMA_VERSION,
     BlockValidationError,
@@ -92,4 +92,3 @@ class ContractAndChunkingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

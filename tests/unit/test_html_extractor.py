@@ -9,8 +9,8 @@ from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
 
-from data_extraction import build_chunks
-from data_extraction.html_extractor import (
+from table_aware_chunker import build_chunks
+from table_aware_chunker.html_extractor import (
     WebPage,
     extract_html_blocks,
     extract_html_text,
@@ -41,7 +41,7 @@ class HtmlExtractorTests(unittest.TestCase):
                 return b"<html><body><main><p>Downloaded text.</p></main></body></html>"
 
         with patch(
-            "data_extraction.html_extractor.urllib.request.urlopen",
+            "table_aware_chunker.html_extractor.urllib.request.urlopen",
             return_value=FakeResponse(),
         ):
             pages = fetch_html_pages(

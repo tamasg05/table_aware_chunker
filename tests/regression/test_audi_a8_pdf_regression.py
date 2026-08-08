@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from data_extraction import (
+from table_aware_chunker import (
     build_chunks,
     extract_corpus,
     load_structured_blocks,

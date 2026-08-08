@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from data_extraction.pdf_extractor import (
+from table_aware_chunker.pdf_extractor import (
     _clean_pdf_table,
     _reconstruct_pdf_table,
     _split_physical_table_row,
@@ -73,7 +73,7 @@ class PdfExtractorTests(unittest.TestCase):
             uploaded.write_bytes(b"%PDF-reusable-test")
             corpus_root = root / "corpora"
             with patch(
-                "data_extraction.pdf_extractor.extract_pdf_blocks",
+                "table_aware_chunker.pdf_extractor.extract_pdf_blocks",
                 return_value=([block], source),
             ) as extract:
                 first = prepare_pdf_corpus(

@@ -5,8 +5,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from data_extraction import build_chunks, validate_blocks
-from data_extraction.pdf_extractor import extract_pdf_blocks
+from table_aware_chunker import build_chunks, validate_blocks
+from table_aware_chunker.pdf_extractor import extract_pdf_blocks
 
 
 ARTIFACTS = Path(__file__).parents[1] / "artifacts"

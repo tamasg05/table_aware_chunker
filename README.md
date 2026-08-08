@@ -57,7 +57,7 @@ MIT-licensed Python library for parsing HTML. This package extends that
 foundation with the semantic block and table processing documented in section
 [How Beautiful Soup is used](#how-beautiful-soup-is-used).
 
-The `data_extraction` package converts PDF documents or HTML pages
+The `table_aware_chunker` package converts PDF documents or HTML pages
 into a common structured representation and can then turn the extracted blocks
 into chunks suitable for RAG applications. The common representation allows a
 downstream RAG pipeline to process different source formats in the same way
@@ -106,7 +106,8 @@ python -m pip install -e .
 ```
 
 The distribution is named `table-aware-chunker`, while the Python import name
-remains `data_extraction` to preserve the package's original API.
+is `table_aware_chunker`. Python distribution names may contain hyphens, but
+import names must be valid Python identifiers and therefore use underscores.
 
 To use a local clone from a sibling project, activate that project's virtual
 environment and install this repository in editable mode. For example, from
@@ -116,7 +117,7 @@ the `ket_rag` directory:
 python -m pip install -e ..\table_aware_chunker
 ```
 
-The consuming project can then import directly from `data_extraction`. Keeping
+The consuming project can then import directly from `table_aware_chunker`. Keeping
 the installation editable means changes made in this repository become
 available without reinstalling it.
 
@@ -129,7 +130,7 @@ generated corpus files:
 ```python
 from pathlib import Path
 
-from data_extraction import build_chunks, extract_corpus
+from table_aware_chunker import build_chunks, extract_corpus
 
 corpus = extract_corpus(
     [Path("specification.pdf")],
