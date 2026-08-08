@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "table-aware-chunker"
+version = "0.1.0"
+description = "Structure-aware PDF and HTML extraction with RAG-oriented chunking"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    { name = "tamasg05" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Text Processing",
+]
+dependencies = [
+    "beautifulsoup4>=4.12,<5",
+    "pdfplumber>=0.11,<1",
+]
+
+[project.urls]
+Repository = "https://github.com/tamasg05/table_aware_chunker"
+
+[tool.setuptools.packages.find]
+where = ["src"]
