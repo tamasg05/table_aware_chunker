@@ -46,29 +46,42 @@ The API provides two primary operations: data extraction and chunking.
 The library can also process simpler HTML tables, but its primary focus is PDF
 documents.
 
-## Intro
+## Introduction
+
 For PDF input, the package uses `pdfplumber`, an MIT-licensed low-level Python
-library for reading PDF text and layout geometry. This package extends that
-foundation with the structure-reconstruction functionality documented in section
-[How `pdfplumber` is used](#how-pdfplumber-is-used).
+library for reading PDF text and layout geometry. `pdfplumber` supplies raw
+elements such as words, coordinates, lines, and detected table boundaries. This
+package adds deterministic rules that interpret those elements as headings,
+paragraphs, table headers, columns, and logical rows, including recovery from
+selected incomplete or irregular layouts. These additional processing steps are
+described under [How `pdfplumber` is used](#how-pdfplumber-is-used).
 
 For HTML input, the package uses Beautiful Soup (`beautifulsoup4`), an
-MIT-licensed Python library for parsing HTML. This package extends that
-foundation with the semantic block and table processing documented in section
+MIT-licensed Python library for parsing HTML into an element tree. This package
+then applies fixed structural rules: it excludes predefined HTML elements such
+as scripts and styles, follows explicit heading levels, expands table cells with
+`rowspan` or `colspan`, and converts the result into the same block format used
+for PDFs. It does not interpret the subject or meaning of the text. This
+processing is described under
 [How Beautiful Soup is used](#how-beautiful-soup-is-used).
 
 The `table_aware_chunker` package converts PDF documents or HTML pages
 into a common structured representation and can then turn the extracted blocks
-into chunks suitable for RAG applications. The common representation allows a
-downstream RAG pipeline to process different source formats in the same way
-while retaining useful structure such as headings, table rows, page numbers,
-and source provenance.
+into chunks suitable for RAG applications. The corpus-preparation, embedding,
+and indexing stages can therefore process PDF and HTML content through the same
+block and chunk interface. In generated chunks, `source_text` retains readable
+text, heading context, captions, and serialized table rows. Page numbers, source
+names or URLs, and other provenance are retained in separate metadata fields;
+they are not inserted into `source_text`.
 
 **A central benefit is the structure-aware extraction of tables.** Instead of
 flattening cells into an ambiguous sequence of text, the package reconstructs
 headers, rows, columns, and their value relationships. When a table is rendered
 into readable text or chunks, the appropriate column header is added to every
-non-empty cell value to make its meaning explicit. For example, this row:
+non-empty cell value to make its meaning explicit. In each generated table
+chunk, this readable representation is stored in `source_text`, preserving
+`column = value` relationships for retrieval and language-model context. For
+example, this row:
 
 | Model | Power | Price |
 | --- | --- | --- |
@@ -87,12 +100,18 @@ with rotated headings, merged visual rows, missing borders, or multiple tables
 on one page.
 
 Separating extraction from chunking and indexing also means that documents can
-be parsed once, inspected, tested, and reused by different RAG systems without
-repeating the potentially expensive or error-prone extraction step. PDF layout
-interpretation is still heuristic, so new complex layouts should be covered by
-regression fixtures before relying on them in production. In `blocks.json`,
-headers and row cells remain stored separately; the explicit `column = value`
-form is created during readable rendering and chunk construction.
+be parsed once, inspected, tested, and reused by different RAG systems. Parsing
+every page and reconstructing tables from coordinates can take considerable
+time for large PDFs. The reconstruction uses heuristics: practical rules based
+on observable layout signals such as coordinates, alignment, spacing, and
+ruling lines. These rules work for the layouts they cover, but an unfamiliar
+design may express its structure differently and produce an incorrect result.
+Saving the extracted blocks allows the result to be reviewed once and reused
+without repeating the work. New complex layouts should therefore be represented
+by regression fixtures before being relied upon in production. In
+`blocks.json`, headers and row cells remain stored separately; the explicit
+`column = value` form is created during readable rendering and chunk
+construction.
 
 ## Installation
 
@@ -107,7 +126,8 @@ python -m pip install -e .
 
 The distribution is named `table-aware-chunker`, while the Python import name
 is `table_aware_chunker`. Python distribution names may contain hyphens, but
-import names must be valid Python identifiers and therefore use underscores.
+import names must be valid Python identifiers, so the import name uses
+underscores instead.
 
 To use a local clone from another project, activate the consuming project's
 virtual environment and install this repository by its relative path. For
@@ -179,10 +199,11 @@ python .\examples\extract_and_chunk_pdf.py .\path\to\document.pdf `
 
 `examples/TableExtractionExample.java` demonstrates how a Java application can
 start the Python example as a subprocess. It uses paths relative to the
-repository root and accepts the PDF path and optional output directory as
-command-line arguments, so it does not contain machine-specific directories.
-It also uses `tests/artifacts/Q8.pdf` and `example_output/` by default. From the
-repository root, compile and run it with:
+repository root rather than absolute paths tied to one computer. The PDF path
+and output directory are optional command-line arguments, allowing callers to
+override the defaults without modifying the Java source. When no arguments are
+provided, it reads `tests/artifacts/Q8.pdf` and writes results under
+`example_output/`. From the repository root, compile and run it with:
 
 ```powershell
 javac .\examples\TableExtractionExample.java
@@ -204,8 +225,17 @@ library. It opens each document, iterates over its pages, and supplies:
 - words and their page coordinates;
 - information about upright and rotated text;
 - detected table boundaries, rows, columns, cells, and ruling lines;
-- page dimensions and other page-level information; and
-- duplicate-character removal through `dedupe_chars()`.
+- page dimensions and other page-level information, which allow coordinates to
+  be interpreted relative to the page and help distinguish separate layout
+  regions; and
+- duplicate-character removal through `dedupe_chars()`. A PDF may contain the
+  same character more than once at almost the same coordinates—for example,
+  because it has overlapping text layers or draws a character twice to create a
+  visual effect. A PDF viewer may display what appears to be one character,
+  while raw extraction returns both copies and can turn `Price` into something
+  like `PPrriiccee`. `dedupe_chars()` compares characters at matching positions
+  and keeps one copy. Legitimate repeated letters at different positions remain
+  unchanged.
 
 The package's own extraction code then interprets this geometric information.
 It recovers omitted unruled columns, separates side-by-side tables,
@@ -213,10 +243,14 @@ reconstructs headers and logical rows, handles selected visually merged rows,
 removes spaces used as thousands separators from prices, and creates the
 structured records in `blocks.json`.
 
-In other words, `pdfplumber` provides text and layout coordinates; it does not
-understand their semantic meaning. It cannot determine by itself that a range,
-battery size, and price belong to the same vehicle version. Those associations
-are reconstructed by this package's layout heuristics.
+In other words, `pdfplumber` provides text and layout coordinates, while this
+package applies deterministic structural rules based on position, row
+alignment, table boundaries, and repeated headers. Neither component assigns
+subject-specific meaning to the extracted values. The extractor may group
+several values into one row because their positions indicate that they belong
+together, but it does not identify what those values represent. Layouts that
+express such relationships differently may require additional extraction rules
+and regression tests.
 
 `pdfplumber` does not perform optical character recognition (OCR). A scanned
 PDF containing page images but no usable text layer will therefore provide
@@ -240,8 +274,21 @@ tracks the heading hierarchy; expands table spans into rectangular rows and
 headers; and creates the common records stored in `blocks.json`.
 
 In other words, Beautiful Soup parses the HTML syntax and exposes its element
-structure; it does not decide which representation is most useful for RAG.
-That selection and conversion are performed by this package.
+structure. It does not choose which elements the extractor should retain,
+associate headings with later elements, expand merged table cells, or define the
+output block format. This package makes those structural decisions from
+explicit HTML tags and fixed inclusion, exclusion, and conversion rules; it
+does not evaluate the meaning of the text. The resulting elements are converted
+into structured text and table blocks. Before saving them, the package checks
+that the records conform to the block schema—for example, that metadata fields
+have the expected types and every table row has the same number of cells as its
+header. Every table header and cell must be represented as a string. The package
+does not infer or enforce column data types: a column may contain values such as
+`"10"`, `"25"`, and `"Not available"` because all three are strings. A literal
+JSON number such as `10`, however, does not conform to the block schema unless
+it is first converted to `"10"`. This validation checks the structure and JSON
+types of the records, not the meaning, accuracy, consistency, or factual
+correctness of their content.
 
 Beautiful Soup does not execute JavaScript. Content added only after a page is
 loaded in a browser may therefore be missing from the downloaded static HTML
@@ -284,7 +331,8 @@ heading-only chunks can:
 - occupy a limited `top-k` retrieval position without supplying the requested
   facts;
 - create unnecessary embeddings and graph nodes;
-- influence KNN connections and PageRank;
+- influence KNN connections and PageRank in graph-based RAG systems, such as
+  KNNG-RAG, where chunks become graph nodes and similarity links affect ranking;
 - cause graph-extraction work to be spent on little useful content; and
 - overweight phrases repeated in both a heading chunk and a table caption.
 
@@ -292,13 +340,17 @@ heading-only chunks can:
 
 Each chunk contains two representations:
 
-- `text` is a predictable word-token form without surrounding punctuation;
-- `source_text` preserves punctuation, headings, and explicit table
-  `column = value` relationships.
+- `text` is a predictable word-token form without surrounding punctuation,
+  retained primarily for experiments with normalized retrieval input;
+- `source_text` preserves punctuation, headings, readable structure, and
+  explicit table `column = value` relationships.
 
-Removing punctuation is not inherently better for modern embedding models.
-Each consuming application can choose which representation to embed and which
-one to supply to its answering model.
+Both fields were retained to make it possible to compare normalized text with
+structure-preserving text without rebuilding the chunks. The recommended
+default is `source_text`, both for embedding and for answer-generation context,
+because it preserves the relationships that make table cells interpretable to
+a language model. The `text` field remains useful for controlled experiments or
+retrieval methods that explicitly require normalized word tokens.
 
 ## Tests
 
@@ -308,8 +360,9 @@ The suite is divided by purpose:
   processing, chunking, and PDF geometry helpers with synthetic inputs;
 - `tests/regression/` processes complete, visually verified PDF fixtures and
   checks that representative tables and facts remain correct; and
-- `tests/artifacts/` contains those public PDF fixtures and their SHA-256
-  hashes.
+- `tests/artifacts/` contains the public PDF fixtures, together with a README
+  that records each fixture's SHA-256 hash so its exact contents can be
+  verified.
 
 Run all tests after installing the package:
 
@@ -369,11 +422,28 @@ Beautiful Soup dependencies are distributed under the MIT License.
    blindly across pages, tables, sources, or unrelated sections.
 
 4. **Propagate vertically merged labels to their logical rows.** Some tables
-   display an equipment level or category once across several physical rows.
-   The extractor should repeat that value in every resulting logical row so
-   each row remains independently interpretable.
+   display an equipment level or category in a cell that visually spans several
+   rows. PDF extraction may place that label only in the first row and leave the
+   corresponding cell empty in the rows below. For example, one `Category A`
+   label may apply to several item rows. The extractor should repeat `Category
+   A` in every resulting logical row so each item remains understandable when
+   retrieved without the surrounding rows.
 
 5. **Represent cells spanning several columns explicitly.** A value centered
-   across multiple variants can otherwise be split between columns. Future
-   block-schema versions could retain `rowspan` and `colspan` metadata or
-   expand the shared value into every affected logical cell.
+   across two or more columns usually applies to every column covered by that
+   visual span. A basic rectangular extraction may place the value in the first
+   column and leave the other covered cells empty, making those columns appear
+   unrelated to it. The preferred future behavior is to copy the shared value
+   into every affected logical cell. Each row or column group would then retain
+   the value when processed independently. The original `colspan` could also be
+   retained as metadata when the exact source layout needs to be reconstructed.
+
+6. **Support additional chunking strategies.** Currently,
+   `strategy="words"` divides ordinary text by word count while preserving table
+   rows. Additional strategies could split prose at sentence or paragraph
+   boundaries, use the tokenizer of a selected embedding model, or respect
+   document sections and pages more strongly. Sentence- or paragraph-aware
+   chunking could preserve coherent ideas, while model-token-aware chunking
+   could use context limits more precisely. Any strategy should continue to
+   preserve table structure and could be evaluated against the existing word
+   strategy for retrieval quality, chunk size, and indexing cost.
