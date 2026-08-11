@@ -149,7 +149,9 @@ construction.
 12. Provide both normalized `text` and structure-preserving `source_text`. For
     table cells, `source_text` contains explicit `column = value` relationships,
     while `text` retains the column names and values without the equal signs or
-    surrounding punctuation.
+    surrounding punctuation. When a particular row has an empty cell, that
+    column is omitted from the row's serialized representations instead of
+    producing an empty `column = value` assignment.
 13. Perform extraction and chunking without AI models or model API calls.
 
 ## Installation
@@ -440,12 +442,26 @@ Beautiful Soup dependencies are distributed under the MIT License.
    across two or more columns usually applies to every column covered by that
    visual span. A basic rectangular extraction may place the value in the first
    column and leave the other covered cells empty, making those columns appear
-   unrelated to it. The preferred future behavior is to copy the shared value
-   into every affected logical cell. Each row or column group would then retain
-   the value when processed independently. The original `colspan` could also be
-   retained as metadata when the exact source layout needs to be reconstructed.
+   unrelated to it, or may incorrectly divide one value at a detected column
+   boundary. For example, a merged cell spanning `WALLBOX DUO` and `VERTICA
+   DUO` should retain the complete value `220000 Ft – 290000 Ft` in both
+   logical cells; similarly, `60000 Ft / 120000 Ft*` should remain complete in
+   both affected cells. The preferred future behavior is to copy the shared
+   value into every affected logical cell. Each row or column group would then
+   retain the value when processed independently. The original `colspan` could
+   also be retained as metadata when the exact source layout needs to be
+   reconstructed.
 
-4. **Support additional chunking strategies.** Currently,
+4. **Preserve the reading order of side-by-side text columns.** Some pages
+   place independent text columns next to each other, for example within a
+   colored information area. The current PDF extraction can combine words from
+   the left and right columns line by line, interleaving two otherwise separate
+   passages. Future extraction should detect the column boundaries and read
+   each column from top to bottom before continuing with the next column. This
+   would keep each passage coherent and prevent unrelated sentences from being
+   mixed in `text` and `source_text`.
+
+5. **Support additional chunking strategies.** Currently,
    `strategy="words"` divides ordinary text by word count while preserving table
    rows. Additional strategies could split prose at sentence or paragraph
    boundaries, use the tokenizer of a selected embedding model, or respect

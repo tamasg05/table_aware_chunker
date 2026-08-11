@@ -124,6 +124,80 @@ class OpelPdfRegressionTests(unittest.TestCase):
         self.assertEqual(row["Listaár"], "18350000")
         self.assertEqual(row["Kedvezményes ár"], "16340000")
 
+    def test_combo_color_cards_become_label_value_rows(self):
+        table = next(
+            block
+            for block in self.blocks_by_file["opel_HU_Combo__Electric_egyteru.pdf"]
+            if block.get("table_id", "").endswith("page-7-table-1")
+        )
+
+        self.assertEqual(table["caption"], "Rendelhető színek")
+        self.assertEqual(table["headers"], ["Label", "Value"])
+        self.assertEqual(
+            table["rows"],
+            [
+                ["Kaolin fehér (alapfényezés)", "0 Ft"],
+                ["Kontrast szürke (metálfényezés)", "180000 Ft"],
+                ["Kiama kék (metálfényezés)", "180000 Ft"],
+                ["Karbon fekete (metálfényezés)", "180000 Ft"],
+                ["Sirkka zöld (metálfényezés)", "180000 Ft"],
+            ],
+        )
+
+        chunks = build_chunks(
+            [table], strategy="words", chunk_size=450, chunk_overlap=60
+        )
+        self.assertEqual(chunks[0]["column_group"], ["Label", "Value"])
+        self.assertIn("Label = Kaolin", chunks[0]["source_text"])
+        self.assertNotIn("Column ", chunks[0]["source_text"])
+
+    def test_combo_charger_table_uses_its_internal_header_row(self):
+        page_blocks = [
+            block
+            for block in self.blocks_by_file["opel_HU_Combo__Electric_egyteru.pdf"]
+            if block.get("page") == 8
+        ]
+        table = next(
+            block
+            for block in page_blocks
+            if block.get("table_id", "").endswith("page-8-table-1")
+        )
+
+        self.assertEqual(table["caption"], "")
+        self.assertEqual(
+            table["headers"],
+            ["BRUTTÓ ÁRAK", "STILO", "WALLBOX DUO", "VERTICA DUO"],
+        )
+        self.assertEqual(len(table["rows"]), 3)
+        self.assertEqual(table["rows"][0][1:], ["419900 Ft", "999900 Ft", "1999900 Ft"])
+        self.assertEqual(table["rows"][1], ["TELEPÍTÉS", "299900 Ft", "220000 Ft –", "290000 Ft"])
+        self.assertEqual(
+            table["rows"][2],
+            ["ÉVES KARBANTARTÁS", "30000 Ft", "60000 Ft /", "120000 Ft*"],
+        )
+
+        page_text = " ".join(
+            block.get("text", "")
+            for block in page_blocks
+            if block.get("type") != "table"
+        )
+        normalized_page_text = page_text.replace(
+            "töltőberen- dezések", "töltőberendezések"
+        )
+        expected_paragraph = (
+            "Az Opel Márkakereskedések felmérik és rögzítik az igényeket, "
+            "partnerünk, az ALTE-GO műszaki csapata pedig ingyenesen "
+            "megvizsgálja elektromos hálózatod. Javaslatot teszünk az "
+            "optimális kiépítésre és a szükséges bővítésre, megrendelés "
+            "esetén pedig kiépítjük a védelmet, telepítjük, illetve üzembe "
+            "helyezzük az elektromos töltőberendezést. Az ALTE-GO vállalja "
+            "a töltőberendezések üzemeltetését, karbantartását, az esetleges "
+            "hibaelhárításokat, cégeknél a töltések mérését, illetve "
+            "riportját is."
+        )
+        self.assertIn(expected_paragraph, normalized_page_text)
+        self.assertNotIn("csapata pedig ingyenesen", " ".join(table["headers"]))
+
     def test_frontera_gs_54_kwh_price_row(self):
         row = self._price_row(
             "opel_HU_Frontera_Electric.pdf",

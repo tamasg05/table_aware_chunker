@@ -19,7 +19,7 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v4-pdf-header-columns"
+PDF_CORPUS_VERSION = "v6-pdf-internal-table-headers"
 
 _GROUPED_NUMBER = re.compile(r"(?<!\d)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\d)")
 
@@ -417,6 +417,103 @@ def _positioned_line_groups(
     ]
 
 
+def _horizontal_word_groups(
+    words: Sequence[dict], minimum_gap: float = 18.0
+) -> list[list[dict]]:
+    """Split one visual line at the large gaps separating repeated cards."""
+    ordered = sorted(words, key=lambda item: float(item["x0"]))
+    if not ordered:
+        return []
+    groups: list[list[dict]] = [[ordered[0]]]
+    for word in ordered[1:]:
+        previous_right = max(float(item["x1"]) for item in groups[-1])
+        if float(word["x0"]) - previous_right > minimum_gap:
+            groups.append([word])
+        else:
+            groups[-1].append(word)
+    return groups
+
+
+def _reconstruct_label_value_grid(
+    table,
+    words: Sequence[dict],
+    section_rows: Sequence[tuple[float, str]],
+    column_count: int,
+) -> tuple[list[list[str]], set[tuple]] | None:
+    """
+    Convert a repeated visual card grid into independent label/value rows.
+
+    Some brochures draw several cards across the page, with a descriptive line
+    and a numeric value under each card. Decorative image and underline edges
+    can make a PDF table detector report many narrow, empty columns. This
+    layout-only rule pairs adjacent label and value lines without interpreting
+    what their text means.
+    """
+    table_left, table_top, table_right, table_bottom = map(float, table.bbox)
+    has_leading_section = any(
+        abs(float(section_top) - table_top) <= 2.0
+        for section_top, _ in section_rows
+    )
+    if column_count < 4 or not has_leading_section:
+        return None
+
+    positioned = [
+        word
+        for word in words
+        if word.get("upright", True)
+        and table_left <= _word_center(word)[0] <= table_right
+        and table_top <= _word_center(word)[1] <= table_bottom
+    ]
+    lines = _positioned_line_groups(positioned)
+    content_lines: list[list[dict]] = []
+    for line in lines:
+        line_text = _positioned_words_text(line)
+        is_section = any(
+            line_text == section_text
+            for _, section_text in section_rows
+        )
+        if not is_section:
+            content_lines.append(line)
+
+    reconstructed: list[list[str]] = []
+    consumed: set[tuple] = set()
+    index = 0
+    while index + 1 < len(content_lines):
+        label_line = content_lines[index]
+        value_line = content_lines[index + 1]
+        vertical_gap = min(float(word["top"]) for word in value_line) - max(
+            float(word["bottom"]) for word in label_line
+        )
+        label_groups = _horizontal_word_groups(label_line)
+        value_groups = _horizontal_word_groups(value_line)
+        value_texts = [_positioned_words_text(group) for group in value_groups]
+        if (
+            -1.0 <= vertical_gap <= 18.0
+            and len(label_groups) == len(value_groups)
+            and value_texts
+            and all(
+                any(character.isdigit() for character in value)
+                for value in value_texts
+            )
+        ):
+            reconstructed.extend(
+                [
+                    _positioned_words_text(label_group),
+                    value_text,
+                ]
+                for label_group, value_text in zip(label_groups, value_texts)
+            )
+            consumed.update(_word_key(word) for word in label_line)
+            consumed.update(_word_key(word) for word in value_line)
+            index += 2
+            continue
+        return None
+
+    if index != len(content_lines) or len(reconstructed) < 3:
+        return None
+    return reconstructed, consumed
+
+
 def _split_physical_table_row(cell_words: Sequence[Sequence[dict]]) -> list[list[str]]:
     """
     Split one ruled row when its price column contains several visual variants.
@@ -510,6 +607,7 @@ def _reconstruct_pdf_table(
     table,
     words: Sequence[dict],
     table_boxes: Sequence[tuple] = (),
+    reconstruction_info: dict[str, bool] | None = None,
 ) -> tuple[list[str], list[list[str]], list[tuple[float, str]], set[tuple]]:
     """
     Reconstruct a detected table from page word geometry.
@@ -525,6 +623,8 @@ def _reconstruct_pdf_table(
         words: Positioned words from the complete page.
         table_boxes: Other detected table boxes used to prevent expansion into
             a side-by-side table.
+        reconstruction_info: Optional output dictionary describing layout
+            decisions needed by document-level caption handling.
 
     Returns:
         Headers, data rows, merged section rows as ``top, text`` pairs, and
@@ -615,7 +715,21 @@ def _reconstruct_pdf_table(
             elif populated:
                 section_rows.append((row_top, populated[0]))
 
+    label_value_grid = _reconstruct_label_value_grid(
+        table,
+        words,
+        section_rows,
+        len(columns) - 1,
+    )
+    if label_value_grid is not None:
+        reconstructed_rows, reconstructed_words = label_value_grid
+        consumed_words.update(reconstructed_words)
+        if reconstruction_info is not None:
+            reconstruction_info["leading_section_caption"] = True
+        return ["Label", "Value"], reconstructed_rows, section_rows, consumed_words
+
     headers: list[str] = []
+    selected_header_words: list[list[dict]] = []
     for index in range(len(columns) - 1):
         x0, x1 = columns[index], columns[index + 1]
         candidates = [
@@ -632,24 +746,62 @@ def _reconstruct_pdf_table(
         selected = [*upright, *rotated]
         header = _positioned_words_text(selected)
         headers.append(header or f"Column {index + 1}")
-        consumed_words.update(_word_key(word) for word in selected)
+        selected_header_words.append(selected)
 
     # A detector can begin at the top of the visible header row rather than
-    # above it. If external header recovery is mostly generic but the first
-    # reconstructed row fills nearly every column, promote that row to headers.
+    # above it. Promote a dense first row when external header recovery is
+    # mostly generic. Also prefer a compact first row over long, multi-line
+    # prose that happens to sit directly above the table.
     promoted_header = False
     generic_headers = sum(header.startswith("Column ") for header in headers)
-    if rows and generic_headers * 2 >= len(headers):
+    prose_header_columns = sum(
+        len([word for word in selected if word.get("upright", True)]) >= 6
+        and len(
+            _positioned_line_groups(
+                [word for word in selected if word.get("upright", True)]
+            )
+        )
+        >= 2
+        for selected in selected_header_words
+    )
+    prose_external_headers = prose_header_columns >= max(
+        2, (3 * len(headers) + 3) // 4
+    )
+    if rows:
         candidate = rows[0]
         populated = sum(bool(value) for value in candidate)
         required = max(2, (3 * len(headers) + 3) // 4)
-        if populated >= required:
+        compact_header = (
+            populated >= required
+            and sum(
+                bool(value)
+                and not any(character.isdigit() for character in value)
+                and len(value.split()) <= 6
+                for value in candidate
+            )
+            >= required
+        )
+        should_promote = (
+            populated >= required and generic_headers * 2 >= len(headers)
+        ) or (prose_external_headers and compact_header)
+        if should_promote:
             headers = [
                 value or f"Column {index + 1}"
                 for index, value in enumerate(candidate)
             ]
             rows = rows[1:]
             promoted_header = True
+            if reconstruction_info is not None:
+                reconstruction_info["promoted_internal_header"] = True
+                if prose_external_headers:
+                    reconstruction_info["rejected_prose_headers"] = True
+
+    if not promoted_header or not prose_external_headers:
+        consumed_words.update(
+            _word_key(word)
+            for selected in selected_header_words
+            for word in selected
+        )
 
     # Remove detector-only trailing regions that contain no header or row
     # content. Horizontal rules in the Opel fixtures extend beyond the final
@@ -740,12 +892,27 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                 found_tables = []
             boxes = [tuple(table.bbox) for table in found_tables]
             words = content_page.extract_words(**_PDF_WORD_OPTIONS) or []
-            table_details: list[tuple[int, object, list[str], list[list[str]], list[tuple[float, str]]]] = []
+            table_details: list[
+                tuple[
+                    int,
+                    object,
+                    list[str],
+                    list[list[str]],
+                    list[tuple[float, str]],
+                    dict[str, bool],
+                ]
+            ] = []
             consumed_table_words: set[tuple] = set()
             for table_number, table in enumerate(found_tables, start=1):
+                reconstruction_info: dict[str, bool] = {}
                 try:
                     headers, rows, section_rows, used_header_words = (
-                        _reconstruct_pdf_table(table, words, boxes)
+                        _reconstruct_pdf_table(
+                            table,
+                            words,
+                            boxes,
+                            reconstruction_info,
+                        )
                     )
                 except Exception:
                     # Retain the former extraction path as a conservative
@@ -754,9 +921,17 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                     headers, rows = _clean_pdf_table(raw_rows)
                     section_rows = []
                     used_header_words = set()
+                    reconstruction_info = {}
                 consumed_table_words.update(used_header_words)
                 table_details.append(
-                    (table_number, table, headers, rows, section_rows)
+                    (
+                        table_number,
+                        table,
+                        headers,
+                        rows,
+                        section_rows,
+                        reconstruction_info,
+                    )
                 )
 
             # Rotated words are used above to reconstruct table headers. They
@@ -787,17 +962,43 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
 
             section_labels = [
                 section_row
-                for _, _, _, _, table_sections in table_details
+                for _, _, _, _, table_sections, _ in table_details
                 for section_row in table_sections
             ]
             caption_sources = [*lines, *section_labels]
-            for table_number, table, headers, rows, section_rows in table_details:
+            for (
+                table_number,
+                table,
+                headers,
+                rows,
+                section_rows,
+                reconstruction_info,
+            ) in table_details:
+                leading_sections = (
+                    [
+                        (top, text)
+                        for top, text in section_rows
+                        if abs(float(top) - float(table.bbox[1])) <= 2.0
+                    ]
+                    if reconstruction_info.get("leading_section_caption")
+                    else []
+                )
+                eligible_caption_sources = (
+                    section_labels
+                    if reconstruction_info.get("rejected_prose_headers")
+                    else caption_sources
+                )
                 preceding = [
                     (top, text)
-                    for top, text in caption_sources
+                    for top, text in eligible_caption_sources
                     if top < float(table.bbox[1])
                 ]
-                caption = max(preceding, default=(0.0, ""), key=lambda item: item[0])[1]
+                caption_source = max(
+                    [*preceding, *leading_sections],
+                    default=(0.0, ""),
+                    key=lambda item: item[0],
+                )
+                caption = caption_source[1]
                 if rows:
                     block = make_table_block(
                         headers,
@@ -810,6 +1011,8 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                     block["bbox"] = [round(float(value), 2) for value in table.bbox]
                     positioned.append((float(table.bbox[1]), block))
                 for section_top, section_text in section_rows:
+                    if (section_top, section_text) == caption_source:
+                        continue
                     positioned.append(
                         (
                             section_top,

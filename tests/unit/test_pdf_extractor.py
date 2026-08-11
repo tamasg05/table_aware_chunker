@@ -178,6 +178,114 @@ class PdfExtractorTests(unittest.TestCase):
         self.assertEqual(rows, [["Astra", "GS", "100"]])
         self.assertEqual(sections, [])
 
+    def test_reconstruction_converts_repeated_label_value_cards(self):
+        table = SimpleNamespace(
+            bbox=(0, 0, 300, 100),
+            rows=[
+                SimpleNamespace(cells=[(0, 0, 300, 10), None, None]),
+                SimpleNamespace(
+                    cells=[
+                        (0, 20, 100, 50),
+                        (100, 20, 200, 50),
+                        (200, 20, 300, 50),
+                    ]
+                ),
+                SimpleNamespace(
+                    cells=[(0, 60, 150, 90), (150, 60, 300, 90), None]
+                ),
+            ],
+        )
+        words = [
+            word("Available", 5, 1, 40, 8),
+            word("options", 42, 1, 75, 8),
+            word("Alpha", 5, 25, 35, 32),
+            word("Beta", 105, 25, 135, 32),
+            word("Gamma", 205, 25, 240, 32),
+            word("10", 70, 38, 85, 45),
+            word("20", 170, 38, 185, 45),
+            word("30", 270, 38, 285, 45),
+            word("Delta", 5, 65, 35, 72),
+            word("Epsilon", 155, 65, 195, 72),
+            word("40", 120, 78, 135, 85),
+            word("50", 270, 78, 285, 85),
+        ]
+
+        headers, rows, sections, _ = _reconstruct_pdf_table(table, words)
+
+        self.assertEqual(headers, ["Label", "Value"])
+        self.assertEqual(
+            rows,
+            [
+                ["Alpha", "10"],
+                ["Beta", "20"],
+                ["Gamma", "30"],
+                ["Delta", "40"],
+                ["Epsilon", "50"],
+            ],
+        )
+        self.assertEqual(sections, [(0.0, "Available options")])
+
+    def test_reconstruction_rejects_multiline_prose_as_external_headers(self):
+        table = SimpleNamespace(
+            bbox=(0, 100, 400, 140),
+            rows=[
+                SimpleNamespace(
+                    cells=[
+                        (0, 100, 100, 120),
+                        (100, 100, 200, 120),
+                        (200, 100, 300, 120),
+                        (300, 100, 400, 120),
+                    ]
+                ),
+                SimpleNamespace(
+                    cells=[
+                        (0, 120, 100, 140),
+                        (100, 120, 200, 140),
+                        (200, 120, 300, 140),
+                        (300, 120, 400, 140),
+                    ]
+                ),
+            ],
+        )
+        prose_words = []
+        for line_number, top in enumerate((60, 70, 80), start=1):
+            for column in range(4):
+                left = column * 100 + 5
+                prose_words.extend(
+                    [
+                        word(f"prose{line_number}-{column}a", left, top, left + 35, top + 7),
+                        word(
+                            f"prose{line_number}-{column}b",
+                            left + 38,
+                            top,
+                            left + 75,
+                            top + 7,
+                        ),
+                    ]
+                )
+        table_words = [
+            word("Prices", 5, 105, 45, 112),
+            word("Basic", 105, 105, 145, 112),
+            word("Duo", 205, 105, 245, 112),
+            word("Premium", 305, 105, 355, 112),
+            word("Device", 5, 125, 45, 132),
+            word("100", 105, 125, 145, 132),
+            word("200", 205, 125, 245, 132),
+            word("300", 305, 125, 345, 132),
+        ]
+        reconstruction_info: dict[str, bool] = {}
+
+        headers, rows, _, consumed = _reconstruct_pdf_table(
+            table,
+            [*prose_words, *table_words],
+            reconstruction_info=reconstruction_info,
+        )
+
+        self.assertEqual(headers, ["Prices", "Basic", "Duo", "Premium"])
+        self.assertEqual(rows, [["Device", "100", "200", "300"]])
+        self.assertTrue(reconstruction_info["rejected_prose_headers"])
+        self.assertFalse(any(key[0].startswith("prose") for key in consumed))
+
 
 if __name__ == "__main__":
     unittest.main()
