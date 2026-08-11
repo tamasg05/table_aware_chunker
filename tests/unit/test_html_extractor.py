@@ -123,6 +123,28 @@ class HtmlExtractorTests(unittest.TestCase):
         self.assertIn("Parameter = Voltage", chunks[0]["source_text"])
         self.assertIn("Limits > Maximum = 3.6 V", chunks[0]["source_text"])
 
+    def test_heading_immediately_before_table_is_not_a_duplicate_chunk(self):
+        _, blocks = extract_html_blocks(
+            """
+            <html><body><main><h1>Operating limits</h1>
+            <table><caption>Operating limits</caption>
+            <tr><th>Parameter</th><th>Value</th></tr>
+            <tr><td>Voltage</td><td>3.6 V</td></tr></table>
+            </main></body></html>
+            """,
+            source_name="specification",
+            source_url="https://example.org/specification",
+        )
+
+        chunks = build_chunks(
+            blocks, strategy="words", chunk_size=30, chunk_overlap=0
+        )
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["block_type"], "table")
+        self.assertTrue(chunks[0]["source_text"].startswith("Operating limits\n"))
+        self.assertEqual(chunks[0]["source_text"].count("Operating limits"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

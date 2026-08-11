@@ -113,6 +113,45 @@ by regression fixtures before being relied upon in production. In
 `column = value` form is created during readable rendering and chunk
 construction.
 
+### Feature List
+
+1. Extract text and tables from one or more text-based PDF documents or static
+   HTML pages through a common API.
+2. Detect the source type automatically. The source type identifies whether the
+   supplied inputs are local PDF paths or HTTP(S) URLs for HTML pages, allowing
+   the package to select the appropriate extractor when all inputs have the same
+   type.
+3. Reconstruct selected complex PDF table layouts, including missing borders or
+   separator lines, unruled leading columns, rotated headings, side-by-side
+   tables, and visually merged rows.
+4. Convert HTML headings, paragraphs, lists, quotations, preformatted text, and
+   tables into the common block format, including expansion of `rowspan` and
+   `colspan` cells.
+5. Associate a heading immediately preceding a table with that table's
+   `heading_path` when the heading is not already retained as a caption or
+   heading path. The associated context is included in the table's
+   `source_text`.
+6. Suppress a separate heading- or caption-only chunk when its exact text is
+   already retained by the following table, while preserving unrelated
+   preceding prose.
+7. Preserve source metadata separately from rendered text, including source
+   names or URLs, page numbers when available, heading paths, and table
+   identifiers.
+8. Save reusable `blocks.json`, `corpus.txt`, and `sources.json` files, together
+   with copies of PDF sources, in deterministically named corpus directories.
+9. Validate block metadata and table shape before saving or chunking the
+   structured records.
+10. Create overlapping word-based chunks for ordinary text while keeping
+    complete table rows together whenever they fit within the configured chunk
+    size.
+11. Split exceptionally wide table rows into column groups while repeating their
+    leading key cells, so each group remains interpretable.
+12. Provide both normalized `text` and structure-preserving `source_text`. For
+    table cells, `source_text` contains explicit `column = value` relationships,
+    while `text` retains the column names and values without the equal signs or
+    surrounding punctuation.
+13. Perform extraction and chunking without AI models or model API calls.
+
 ## Installation
 
 The project requires Python 3.10 or newer. For local development, create and
@@ -310,7 +349,10 @@ adding another row would exceed the target size. Rows are not split merely to
 reach a uniform chunk length. Consequently, a small table or the final rows of
 a table can also produce a short chunk.
 
-For example, a chunk such as:
+When a heading immediately precedes a table, the package associates it with the
+table and includes it in the table's `source_text`. If that same heading would
+otherwise become a separate heading- or caption-only chunk, the duplicate is
+suppressed. Other preceding prose is preserved. A heading-only chunk such as:
 
 ```json
 {
@@ -320,9 +362,9 @@ For example, a chunk such as:
 }
 ```
 
-is likely a section heading that was flushed as text when the following table
-was encountered. If the table already retains the same value as its caption or
-heading path, the independent heading-only chunk is redundant.
+can still occur when the heading does not directly introduce a table or is not
+retained by that table. In those cases it remains independent content rather
+than a known duplicate.
 
 Short chunks are not automatically incorrect. A concise paragraph may contain
 a complete and important fact. However, structurally incomplete or duplicated
@@ -381,47 +423,12 @@ Beautiful Soup dependencies are distributed under the MIT License.
 
 ## Future Work
 
-1. **Associate headings with following tables.** When a heading immediately
-   introduces a table, store it in the table's `caption` or `heading_path` and
-   include it in the table's `source_text`. For example, a document may contain
-   a heading followed directly by a table:
-
-   ```text
-   Audi A8 Prices
-
-   | Model | Power | Price |
-   | A8 55 TFSI | 340 LE | 41256010 HUF |
-   ```
-
-   Extracting the heading and table as unrelated blocks leaves the table without
-   its subject when it is retrieved by itself. Associating them would produce
-   table text such as:
-
-   ```text
-   Audi A8 Prices
-   Model = A8 55 TFSI; Power = 340 LE; Price = 41256010 HUF.
-   ```
-
-   A direct table title can be stored as its `caption`, while `heading_path` can
-   retain the surrounding document hierarchy. Including this information in
-   `source_text` makes the retrieved table independently understandable.
-
-2. **Suppress duplicate heading-only chunks.** If a table already retains its
-   introductory heading, do not also produce an independent chunk containing
-   only the same heading. Otherwise, the example above could produce both an
-   `Audi A8 Prices` chunk and a table chunk that already begins with `Audi A8
-   Prices`. The heading-only chunk adds no information, but it can still occupy
-   a limited retrieval position, create an unnecessary embedding or graph node,
-   and compete with the more informative table chunk. Suppression would apply
-   only when the heading has been preserved with the table; meaningful headings
-   that introduce other content would remain available.
-
-3. **Support a configurable minimum text-chunk target.** Compatible short text
+1. **Support a configurable minimum text-chunk target.** Compatible short text
    blocks could be merged to reduce retrieval and indexing overhead. Merging
    must continue to respect structural boundaries: blocks should not be joined
    blindly across pages, tables, sources, or unrelated sections.
 
-4. **Propagate vertically merged labels to their logical rows.** Some tables
+2. **Propagate vertically merged labels to their logical rows.** Some tables
    display an equipment level or category in a cell that visually spans several
    rows. PDF extraction may place that label only in the first row and leave the
    corresponding cell empty in the rows below. For example, one `Category A`
@@ -429,7 +436,7 @@ Beautiful Soup dependencies are distributed under the MIT License.
    A` in every resulting logical row so each item remains understandable when
    retrieved without the surrounding rows.
 
-5. **Represent cells spanning several columns explicitly.** A value centered
+3. **Represent cells spanning several columns explicitly.** A value centered
    across two or more columns usually applies to every column covered by that
    visual span. A basic rectangular extraction may place the value in the first
    column and leave the other covered cells empty, making those columns appear
@@ -438,7 +445,7 @@ Beautiful Soup dependencies are distributed under the MIT License.
    the value when processed independently. The original `colspan` could also be
    retained as metadata when the exact source layout needs to be reconstructed.
 
-6. **Support additional chunking strategies.** Currently,
+4. **Support additional chunking strategies.** Currently,
    `strategy="words"` divides ordinary text by word count while preserving table
    rows. Additional strategies could split prose at sentence or paragraph
    boundaries, use the tokenizer of a selected embedding model, or respect

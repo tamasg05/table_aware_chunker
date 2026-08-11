@@ -137,6 +137,55 @@ def make_table_block(
     }
 
 
+def _same_source_location(first: dict, second: dict) -> bool:
+    """Return whether two blocks belong to the same source and page."""
+    return (
+        first.get("source_name", "") == second.get("source_name", "")
+        and first.get("source_url", "") == second.get("source_url", "")
+        and first.get("page") == second.get("page")
+    )
+
+
+def associate_table_headings(blocks: Sequence[dict]) -> list[dict]:
+    """
+    Attach an immediately preceding heading to the following table.
+
+    Existing table captions and heading paths remain authoritative. When a
+    heading is not already represented, its complete heading path is copied to
+    the table. New top-level block dictionaries are returned so callers' input
+    objects are not modified.
+    """
+    associated: list[dict] = []
+    for original in blocks:
+        block = {**original}
+        if block.get("type") == "table" and associated:
+            previous = associated[-1]
+            heading = clean_text(previous.get("text", ""))
+            if (
+                previous.get("type") == "heading"
+                and heading
+                and _same_source_location(previous, block)
+            ):
+                parent_path = [
+                    clean_text(item)
+                    for item in previous.get("heading_path", [])
+                    if clean_text(item)
+                ]
+                full_path = [*parent_path, heading]
+                table_path = [
+                    clean_text(item)
+                    for item in block.get("heading_path", [])
+                    if clean_text(item)
+                ]
+                caption = clean_text(block.get("caption", ""))
+                already_in_path = table_path[: len(full_path)] == full_path
+                can_extend_path = not table_path or table_path == parent_path
+                if caption != heading and not already_in_path and can_extend_path:
+                    block["heading_path"] = full_path
+        associated.append(block)
+    return associated
+
+
 def render_table_row(block: dict, row: Sequence[str]) -> str:
     """
     Serialize one table row as explicit header-value pairs.
@@ -175,7 +224,10 @@ def render_block(block: dict, rows: Sequence[Sequence[str]] | None = None) -> st
         return "\n".join(part for part in (prefix, text) if part)
 
     selected_rows = block.get("rows", []) if rows is None else rows
-    lines = [part for part in (prefix, clean_text(block.get("caption", ""))) if part]
+    caption = clean_text(block.get("caption", ""))
+    lines = [prefix] if prefix else []
+    if caption and caption != prefix and caption not in heading_path:
+        lines.append(caption)
     for row in selected_rows:
         row_text = render_table_row(block, row)
         if row_text:
@@ -269,7 +321,10 @@ def save_structured_corpus(
     format_version: str = STRUCTURED_CORPUS_VERSION,
 ) -> SavedStructuredCorpus:
     """Persist validated blocks, readable text, and provenance metadata."""
-    usable_blocks = [block for block in blocks if render_block(block).strip()]
+    associated_blocks = associate_table_headings(blocks)
+    usable_blocks = [
+        block for block in associated_blocks if render_block(block).strip()
+    ]
     validate_blocks(usable_blocks)
     if not usable_blocks:
         raise ValueError("No readable text or table rows were extracted.")

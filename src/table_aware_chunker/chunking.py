@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .blocks import (
+    associate_table_headings,
+    clean_text,
     load_structured_blocks,
     render_block,
     render_table_row,
@@ -95,6 +97,40 @@ def _copy_metadata(block: dict) -> dict:
         for key in ("source_name", "source_url", "page", "heading_path")
         if block.get(key) not in (None, "", [])
     }
+
+
+def _same_source_location(first: dict, second: dict) -> bool:
+    """Return whether two blocks belong to the same source and page."""
+    return (
+        first.get("source_name", "") == second.get("source_name", "")
+        and first.get("source_url", "") == second.get("source_url", "")
+        and first.get("page") == second.get("page")
+    )
+
+
+def _table_retains_introductory_block(block: dict, table: dict) -> bool:
+    """Return whether a table already contains one preceding block's text."""
+    if not _same_source_location(block, table):
+        return False
+    text = clean_text(block.get("text", ""))
+    if not text:
+        return False
+    if text == clean_text(table.get("caption", "")):
+        return True
+    if block.get("type") != "heading":
+        return False
+    full_heading_path = [
+        clean_text(item)
+        for item in block.get("heading_path", [])
+        if clean_text(item)
+    ]
+    full_heading_path.append(text)
+    table_heading_path = [
+        clean_text(item)
+        for item in table.get("heading_path", [])
+        if clean_text(item)
+    ]
+    return table_heading_path[: len(full_heading_path)] == full_heading_path
 
 
 def _table_word_count(block: dict, rows: Sequence[Sequence[str]]) -> int:
@@ -283,11 +319,17 @@ def chunk_structured_blocks(blocks: Sequence[dict], size: int, overlap: int) -> 
             selected.append(row)
         flush_rows(len(rows))
 
-    for block in blocks:
+    for block in associate_table_headings(blocks):
         if block.get("type") == "table":
-            flush_text()
             if not block.get("rows"):
+                flush_text()
+                pending_key = None
                 continue
+            while pending and _table_retains_introductory_block(
+                pending[-1], block
+            ):
+                pending.pop()
+            flush_text()
             for table_group in _table_column_groups(block, size):
                 append_table_rows(table_group)
             pending_key = None

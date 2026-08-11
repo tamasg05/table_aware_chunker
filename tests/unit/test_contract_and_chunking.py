@@ -14,7 +14,11 @@ from table_aware_chunker import (
     build_chunks,
     chunk_words,
     extract_corpus,
+    load_structured_blocks,
+    make_table_block,
+    make_text_block,
     render_block,
+    save_structured_corpus,
     tokenize_words,
     validate_blocks,
 )
@@ -84,6 +88,110 @@ class ContractAndChunkingTests(unittest.TestCase):
             )
             self.assertEqual(chunks[0]["block_type"], "table")
             self.assertIn("Power = 340 LE", chunks[0]["source_text"])
+
+    def test_introductory_heading_is_attached_and_not_chunked_separately(self):
+        heading = make_text_block(
+            "Operating limits",
+            "specification.pdf",
+            page=3,
+            heading_path=["Electrical system"],
+            block_type="heading",
+        )
+        table = make_table_block(
+            ["Parameter", "Value"],
+            [["Voltage", "3.6 V"]],
+            "specification.pdf",
+            table_id="table-1",
+            page=3,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            saved = save_structured_corpus(
+                [heading, table],
+                [{"kind": "pdf", "filename": "specification.pdf"}],
+                Path(temporary),
+                request_key="heading-table-test",
+            )
+            saved_blocks = load_structured_blocks(saved.blocks_path)
+            self.assertEqual(
+                saved_blocks[1]["heading_path"],
+                ["Electrical system", "Operating limits"],
+            )
+
+            chunks = build_chunks(
+                saved.blocks_path,
+                strategy="words",
+                chunk_size=30,
+                chunk_overlap=0,
+            )
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["block_type"], "table")
+        self.assertTrue(
+            chunks[0]["source_text"].startswith(
+                "Electrical system > Operating limits\n"
+            )
+        )
+        self.assertNotEqual(chunks[0]["source_text"], "Operating limits")
+
+    def test_table_caption_suppresses_only_its_duplicate_preceding_block(self):
+        overview = make_text_block(
+            "This section explains the available configurations.",
+            "specification.pdf",
+            page=1,
+        )
+        caption_block = make_text_block(
+            "Configuration matrix",
+            "specification.pdf",
+            page=1,
+        )
+        table = make_table_block(
+            ["Option", "Status"],
+            [["Feature A", "Available"]],
+            "specification.pdf",
+            table_id="table-1",
+            caption="Configuration matrix",
+            page=1,
+        )
+
+        chunks = build_chunks(
+            [overview, caption_block, table],
+            strategy="words",
+            chunk_size=30,
+            chunk_overlap=0,
+        )
+
+        self.assertEqual(
+            [chunk["block_type"] for chunk in chunks], ["text", "table"]
+        )
+        self.assertIn("available configurations", chunks[0]["source_text"])
+        self.assertEqual(chunks[1]["source_text"].count("Configuration matrix"), 1)
+
+    def test_empty_table_does_not_suppress_its_preceding_heading(self):
+        heading = make_text_block(
+            "Empty results",
+            "specification.pdf",
+            page=1,
+            block_type="heading",
+        )
+        table = make_table_block(
+            ["Name", "Value"],
+            [],
+            "specification.pdf",
+            table_id="table-1",
+            page=1,
+        )
+
+        chunks = build_chunks(
+            [heading, table],
+            strategy="words",
+            chunk_size=30,
+            chunk_overlap=0,
+        )
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["block_type"], "text")
+        self.assertEqual(chunks[0]["source_text"], "Empty results")
 
     def test_unknown_chunking_strategy_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported chunking strategy"):
