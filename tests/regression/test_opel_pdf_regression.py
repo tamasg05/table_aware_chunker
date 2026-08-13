@@ -198,6 +198,44 @@ class OpelPdfRegressionTests(unittest.TestCase):
         self.assertIn(expected_paragraph, normalized_page_text)
         self.assertNotIn("csapata pedig ingyenesen", " ".join(table["headers"]))
 
+    def test_combo_side_by_side_text_columns_keep_reading_order(self):
+        texts = [
+            block.get("text", "")
+            for block in self.blocks_by_file["opel_HU_Combo__Electric_egyteru.pdf"]
+            if block.get("page") == 8 and block.get("type") != "table"
+        ]
+        left_column = (
+            "Elektromos vagy plug-in hybrid Opeledhez válaszd otthonodba a "
+            "beépített töltőkábellel rendelkező 22 kW-os Stilo fali autótöltőt."
+        )
+        right_column = (
+            "Több autó esetén Opel flottádhoz válaszd a 2×22 kW-os "
+            "Wallbox-Duo vagy Vertica Duo töltőket, melyek a helyszín "
+            "energiaellátására szabottan kínálnak hatékony megoldást. A "
+            "rendszerek hiteles méréssel, RFID-azonosítással, illetve "
+            "életvédelmi eszközökkel kerülnek beépítésre."
+        )
+        start = texts.index(left_column)
+
+        self.assertEqual(texts[start : start + 2], [left_column, right_column])
+        right_start = start + 1
+        self.assertEqual(
+            texts[right_start + 1],
+            "SZOLGÁLTATÁSOK",
+        )
+
+        self.assertIn(
+            "ELEKTROMOS, ILLETVE PLUG-IN HYBRID AUTÓDHOZ HÁZHOZ VISSZÜK "
+            "AZ ENERGIAELLÁTÁST. VÁLASSZ AZ AUTÓTÖLTŐK ÉS A HOZZÁJUK "
+            "KAPCSOLÓDÓ SZOLGÁLTATÁSOK KÖZÜL!",
+            texts,
+        )
+        self.assertIn(
+            "Bármilyen helyszínen is tervezel töltőállomást létesíteni, "
+            "ideális megoldást kínálunk a személyes igényeidhez igazodva.",
+            texts,
+        )
+
     def test_frontera_gs_54_kwh_price_row(self):
         row = self._price_row(
             "opel_HU_Frontera_Electric.pdf",

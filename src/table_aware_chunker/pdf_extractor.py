@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import shutil
+import statistics
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v7-pdf-side-by-side-leading-columns"
+PDF_CORPUS_VERSION = "v9-pdf-text-paragraphs"
 
 _GROUPED_NUMBER = re.compile(r"(?<!\w)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\w)")
 
@@ -193,6 +194,38 @@ def _inside_any_table(word: dict, boxes: Sequence[tuple]) -> bool:
     )
 
 
+def _positioned_line_text(words: Sequence[dict]) -> str:
+    """Join one visual line, repairing word fragments with no visible gap."""
+    ordered = sorted(words, key=lambda item: float(item["x0"]))
+    if not ordered:
+        return ""
+    text = str(ordered[0].get("text", ""))
+    previous = ordered[0]
+    for word in ordered[1:]:
+        gap = float(word["x0"]) - float(previous["x1"])
+        height = min(
+            float(previous["bottom"]) - float(previous["top"]),
+            float(word["bottom"]) - float(word["top"]),
+        )
+        separator = "" if gap <= max(0.5, height * 0.06) else " "
+        text += separator + str(word.get("text", ""))
+        previous = word
+    return clean_text(text)
+
+
+def _join_wrapped_pdf_lines(lines: Sequence[str]) -> str:
+    """Join wrapped visual lines and remove hyphens used only at line ends."""
+    joined = ""
+    for line in (clean_text(value) for value in lines):
+        if not line:
+            continue
+        if joined.endswith("-"):
+            joined = joined[:-1].rstrip() + line
+        else:
+            joined = f"{joined} {line}".strip()
+    return clean_text(joined)
+
+
 def _group_pdf_lines(words: Sequence[dict], tolerance: float = 3.0) -> list[tuple[float, str]]:
     """
     Reconstruct approximate text lines from positioned PDF words.
@@ -214,12 +247,7 @@ def _group_pdf_lines(words: Sequence[dict], tolerance: float = 3.0) -> list[tupl
     return [
         (
             top,
-            clean_text(
-                " ".join(
-                    str(word.get("text", ""))
-                    for word in sorted(line_words, key=lambda item: float(item["x0"]))
-                )
-            ),
+            _positioned_line_text(line_words),
         )
         for top, line_words in lines
     ]
@@ -414,6 +442,150 @@ def _positioned_line_groups(
     return [
         sorted(line_words, key=lambda item: float(item["x0"]))
         for _, line_words in lines
+    ]
+
+
+def _line_column_gutter(line: Sequence[dict]) -> tuple[float, float] | None:
+    """Return the strongest whitespace gutter separating one line's columns."""
+    ordered = sorted(line, key=lambda item: float(item["x0"]))
+    if len(ordered) < 2:
+        return None
+    gaps = [
+        (
+            float(right["x0"]) - float(left["x1"]),
+            float(left["x1"]),
+            float(right["x0"]),
+        )
+        for left, right in zip(ordered, ordered[1:])
+    ]
+    positive_gaps = [gap for gap, _, _ in gaps if gap > 0]
+    if not positive_gaps:
+        return None
+    word_heights = [
+        float(word["bottom"]) - float(word["top"])
+        for word in ordered
+    ]
+    minimum = max(
+        6.0,
+        statistics.median(word_heights) * 0.6,
+        statistics.median(positive_gaps) * 2.5,
+    )
+    gap, left, right = max(gaps, key=lambda item: item[0])
+    return (left, right) if gap >= minimum else None
+
+
+def _group_pdf_text_lines(
+    words: Sequence[dict], tolerance: float = 3.0
+) -> list[tuple[float, str]]:
+    """
+    Reconstruct page text while reading recurring columns independently.
+
+    Two or more consecutive visual lines whose strongest whitespace gaps
+    overlap are treated as a column region. The left column is emitted from
+    top to bottom before the right column. Full-width text before and after the
+    region retains its ordinary geometric order.
+    """
+    lines = _positioned_line_groups(words, tolerance)
+    result: list[dict] = []
+
+    def append_full_width_line(line: Sequence[dict]) -> None:
+        """Append or merge one ordinary wrapped line into a paragraph."""
+        top = min(float(word["top"]) for word in line)
+        bottom = max(float(word["bottom"]) for word in line)
+        left = min(float(word["x0"]) for word in line)
+        height = bottom - top
+        text = _positioned_words_text(line)
+        if result and result[-1]["kind"] == "full":
+            previous = result[-1]
+            vertical_gap = top - float(previous["bottom"])
+            aligned = abs(left - float(previous["left"])) <= max(
+                12.0, height * 1.5
+            )
+            if vertical_gap <= max(4.0, height * 0.3) and aligned:
+                previous["text"] = _join_wrapped_pdf_lines(
+                    [str(previous["text"]), text]
+                )
+                previous["bottom"] = bottom
+                return
+        result.append(
+            {
+                "kind": "full",
+                "top": top,
+                "bottom": bottom,
+                "left": left,
+                "text": text,
+            }
+        )
+
+    index = 0
+    while index < len(lines):
+        gutter = _line_column_gutter(lines[index])
+        if gutter is None:
+            append_full_width_line(lines[index])
+            index += 1
+            continue
+
+        gutter_left, gutter_right = gutter
+        end = index + 1
+        previous_bottom = max(float(word["bottom"]) for word in lines[index])
+        while end < len(lines):
+            next_gutter = _line_column_gutter(lines[end])
+            next_top = min(float(word["top"]) for word in lines[end])
+            typical_height = statistics.median(
+                float(word["bottom"]) - float(word["top"])
+                for word in lines[end]
+            )
+            if (
+                next_gutter is None
+                or next_top - previous_bottom > max(8.0, typical_height * 1.5)
+            ):
+                break
+            overlap_left = max(gutter_left, next_gutter[0])
+            overlap_right = min(gutter_right, next_gutter[1])
+            if overlap_right - overlap_left < 4.0:
+                break
+            gutter_left, gutter_right = overlap_left, overlap_right
+            previous_bottom = max(float(word["bottom"]) for word in lines[end])
+            end += 1
+
+        if end - index < 2:
+            append_full_width_line(lines[index])
+            index += 1
+            continue
+
+        divider = (gutter_left + gutter_right) / 2
+        first_top = min(float(word["top"]) for word in lines[index])
+        for side_number, side in enumerate(("left", "right")):
+            selected_lines: list[str] = []
+            for line in lines[index:end]:
+                selected = [
+                    word
+                    for word in line
+                    if (_word_center(word)[0] < divider) == (side == "left")
+                ]
+                if selected:
+                    selected_lines.append(_positioned_words_text(selected))
+            if selected_lines:
+                result.append(
+                    {
+                        "kind": "column",
+                        "top": first_top + side_number * 0.001,
+                        "bottom": previous_bottom,
+                        "left": min(
+                            float(word["x0"])
+                            for line in lines[index:end]
+                            for word in line
+                            if (_word_center(word)[0] < divider)
+                            == (side == "left")
+                        ),
+                        "text": _join_wrapped_pdf_lines(selected_lines),
+                    }
+                )
+        index = end
+    return [
+        (float(item["top"]), str(item["text"]))
+        for item in result
+        if item["text"]
     ]
 
 
@@ -958,7 +1130,7 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                 and _word_key(word) not in consumed_table_words
             ]
             positioned: list[tuple[float, dict]] = []
-            lines = _group_pdf_lines(outside_words)
+            lines = _group_pdf_text_lines(outside_words)
             for top, text in lines:
                 if text:
                     positioned.append(

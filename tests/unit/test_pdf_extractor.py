@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from table_aware_chunker.pdf_extractor import (
     _clean_pdf_table,
+    _group_pdf_text_lines,
     _positioned_words_text,
     _reconstruct_pdf_table,
     _split_physical_table_row,
@@ -32,6 +33,71 @@ def word(text, x0, top, x1, bottom):
 
 
 class PdfExtractorTests(unittest.TestCase):
+    def test_side_by_side_text_columns_are_read_one_column_at_a_time(self):
+        words = [
+            word("Left", 0, 0, 12, 8),
+            word("one", 14, 0, 25, 8),
+            word("Right", 35, 0, 48, 8),
+            word("one", 50, 0, 61, 8),
+            word("Left", 0, 10, 12, 18),
+            word("two", 14, 10, 25, 18),
+            word("Right", 35, 10, 48, 18),
+            word("two", 50, 10, 61, 18),
+        ]
+
+        self.assertEqual(
+            [text for _, text in _group_pdf_text_lines(words)],
+            ["Left one Left two", "Right one Right two"],
+        )
+
+    def test_close_text_columns_use_repeated_gutter_not_fixed_page_width(self):
+        words = [
+            word("Alpha", 0, 0, 12, 8),
+            word("first", 14, 0, 25, 8),
+            word("Beta", 33, 0, 44, 8),
+            word("first", 46, 0, 57, 8),
+            word("Alpha", 0, 10, 12, 18),
+            word("second", 14, 10, 27, 18),
+            word("Beta", 35, 10, 46, 18),
+            word("second", 48, 10, 61, 18),
+        ]
+
+        self.assertEqual(
+            [text for _, text in _group_pdf_text_lines(words)],
+            ["Alpha first Alpha second", "Beta first Beta second"],
+        )
+
+    def test_single_full_width_lines_are_not_split_into_columns(self):
+        words = [
+            word("A", 0, 0, 4, 8),
+            word("single", 6, 0, 18, 8),
+            word("line", 20, 0, 28, 8),
+            word("Another", 0, 30, 14, 38),
+            word("ordinary", 16, 30, 32, 38),
+            word("line", 34, 30, 42, 38),
+        ]
+
+        self.assertEqual(
+            [text for _, text in _group_pdf_text_lines(words)],
+            ["A single line", "Another ordinary line"],
+        )
+
+    def test_wrapped_lines_form_one_paragraph_and_repair_fragments(self):
+        words = [
+            word("A", 0, 0, 4, 8),
+            word("complete", 6, 0, 20, 8),
+            word("para", 22, 0, 31, 8),
+            word("graph", 31.2, 0, 42, 8),
+            word("contin-", 0, 10, 14, 18),
+            word("ues", 0, 20, 7, 28),
+            word("here.", 9, 20, 18, 28),
+        ]
+
+        self.assertEqual(
+            [text for _, text in _group_pdf_text_lines(words)],
+            ["A complete paragraph continues here."],
+        )
+
     def test_grouped_prices_are_compacted_but_alphanumeric_specs_are_not(self):
         self.assertEqual(
             _positioned_words_text(

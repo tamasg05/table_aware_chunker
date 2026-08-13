@@ -124,35 +124,39 @@ construction.
 3. Reconstruct selected complex PDF table layouts, including missing borders or
    separator lines, unruled leading columns, rotated headings, side-by-side
    tables, and visually merged rows.
-4. Convert HTML headings, paragraphs, lists, quotations, preformatted text, and
+4. Process PDF text arranged in two side-by-side columns by detecting the
+   whitespace gutter between them, reading the left column before the right
+   column, and joining each column's wrapped visual lines into a coherent
+   paragraph.
+5. Convert HTML headings, paragraphs, lists, quotations, preformatted text, and
    tables into the common block format, including expansion of `rowspan` and
    `colspan` cells.
-5. Associate a heading immediately preceding a table with that table's
+6. Associate a heading immediately preceding a table with that table's
    `heading_path` when the heading is not already retained as a caption or
    heading path. The associated context is included in the table's
    `source_text`.
-6. Suppress a separate heading- or caption-only chunk when its exact text is
+7. Suppress a separate heading- or caption-only chunk when its exact text is
    already retained by the following table, while preserving unrelated
    preceding prose.
-7. Preserve source metadata separately from rendered text, including source
+8. Preserve source metadata separately from rendered text, including source
    names or URLs, page numbers when available, heading paths, and table
    identifiers.
-8. Save reusable `blocks.json`, `corpus.txt`, and `sources.json` files, together
+9. Save reusable `blocks.json`, `corpus.txt`, and `sources.json` files, together
    with copies of PDF sources, in deterministically named corpus directories.
-9. Validate block metadata and table shape before saving or chunking the
+10. Validate block metadata and table shape before saving or chunking the
    structured records.
-10. Create overlapping word-based chunks for ordinary text while keeping
+11. Create overlapping word-based chunks for ordinary text while keeping
     complete table rows together whenever they fit within the configured chunk
     size.
-11. Split exceptionally wide table rows into column groups while repeating their
+12. Split exceptionally wide table rows into column groups while repeating their
     leading key cells, so each group remains interpretable.
-12. Provide both normalized `text` and structure-preserving `source_text`. For
+13. Provide both normalized `text` and structure-preserving `source_text`. For
     table cells, `source_text` contains explicit `column = value` relationships,
     while `text` retains the column names and values without the equal signs or
     surrounding punctuation. When a particular row has an empty cell, that
     column is omitted from the row's serialized representations instead of
     producing an empty `column = value` assignment.
-13. Perform extraction and chunking without AI models or model API calls.
+14. Perform extraction and chunking without AI models or model API calls.
 
 ## Installation
 
@@ -452,14 +456,13 @@ Beautiful Soup dependencies are distributed under the MIT License.
    also be retained as metadata when the exact source layout needs to be
    reconstructed.
 
-4. **Preserve the reading order of side-by-side text columns.** Some pages
-   place independent text columns next to each other, for example within a
-   colored information area. The current PDF extraction can combine words from
-   the left and right columns line by line, interleaving two otherwise separate
-   passages. Future extraction should detect the column boundaries and read
-   each column from top to bottom before continuing with the next column. This
-   would keep each passage coherent and prevent unrelated sentences from being
-   mixed in `text` and `source_text`.
+4. **Support text layouts with three or more columns.** The current PDF text
+   extraction detects one recurring whitespace gutter and therefore separates
+   a region into two columns. A page containing three or more side-by-side text
+   columns has multiple gutters, so some columns could still be combined or
+   read in the wrong order. Future extraction should detect every recurring
+   gutter in the region and read each resulting column from top to bottom,
+   proceeding from the leftmost column to the rightmost column.
 
 5. **Support additional chunking strategies.** Currently,
    `strategy="words"` divides ordinary text by word count while preserving table
