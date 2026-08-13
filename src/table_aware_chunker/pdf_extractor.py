@@ -19,9 +19,9 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v6-pdf-internal-table-headers"
+PDF_CORPUS_VERSION = "v7-pdf-side-by-side-leading-columns"
 
-_GROUPED_NUMBER = re.compile(r"(?<!\d)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\d)")
+_GROUPED_NUMBER = re.compile(r"(?<!\w)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\w)")
 
 # Geometric ordering avoids the one-character fragments produced when
 # ``use_text_flow=True`` encounters 90-degree table headings.  The rotated
@@ -655,18 +655,31 @@ def _reconstruct_pdf_table(
     table_left = float(table.bbox[0])
     table_top = float(table.bbox[1])
     table_bottom = float(table.bbox[3])
-    has_left_peer = any(
-        float(box[2]) <= table_left
-        and min(float(box[3]), table_bottom) > max(float(box[1]), table_top)
+    left_peer_edges = [
+        float(box[2])
         for box in table_boxes
+        if float(box[2]) <= table_left
+        and min(float(box[3]), table_bottom) > max(float(box[1]), table_top)
         if tuple(box) != tuple(table.bbox)
-    )
-    left_words = [word for word in aligned_words if _word_center(word)[0] < table_left]
-    if left_words and not has_left_peer:
+    ]
+    left_limit = max(left_peer_edges, default=float("-inf"))
+    left_words = [
+        word
+        for word in aligned_words
+        if left_limit < _word_center(word)[0] < table_left
+    ]
+    if left_words:
         coordinates.append(min(float(word["x0"]) for word in left_words))
         if row_bands:
+            safe_left_words = [
+                word for word in words if _word_center(word)[0] > left_limit
+            ]
             coordinates.extend(
-                _infer_left_header_boundaries(words, row_bands[0], table_left)
+                _infer_left_header_boundaries(
+                    safe_left_words,
+                    row_bands[0],
+                    table_left,
+                )
             )
     columns = _unique_coordinates(coordinates)
     if len(columns) < 2:

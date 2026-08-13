@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from table_aware_chunker.pdf_extractor import (
     _clean_pdf_table,
+    _positioned_words_text,
     _reconstruct_pdf_table,
     _split_physical_table_row,
     parse_pdf_paths,
@@ -31,6 +32,29 @@ def word(text, x0, top, x1, bottom):
 
 
 class PdfExtractorTests(unittest.TestCase):
+    def test_grouped_prices_are_compacted_but_alphanumeric_specs_are_not(self):
+        self.assertEqual(
+            _positioned_words_text(
+                [
+                    word("41", 0, 0, 5, 5),
+                    word("256", 6, 0, 13, 5),
+                    word("010", 14, 0, 21, 5),
+                    word("Ft", 22, 0, 27, 5),
+                ]
+            ),
+            "41256010 Ft",
+        )
+        self.assertEqual(
+            _positioned_words_text(
+                [
+                    word("R21", 0, 0, 7, 5),
+                    word("113Y", 8, 0, 17, 5),
+                    word("xl", 18, 0, 22, 5),
+                ]
+            ),
+            "R21 113Y xl",
+        )
+
     def test_table_cleanup_and_content_based_pdf_identity(self):
         headers, rows = _clean_pdf_table(
             [
@@ -129,6 +153,43 @@ class PdfExtractorTests(unittest.TestCase):
         self.assertEqual(headers, ["Name", "Price"])
         self.assertEqual(rows, [["Wheel", "100"]])
         self.assertFalse(any(key[0] == "Other-table" for key in consumed))
+
+    def test_reconstruction_recovers_column_between_side_by_side_tables(self):
+        table = SimpleNamespace(
+            bbox=(70, 10, 100, 30),
+            rows=[
+                SimpleNamespace(cells=[(70, 10, 85, 20), (85, 10, 100, 20)]),
+                SimpleNamespace(cells=[(70, 20, 85, 30), (85, 20, 100, 30)]),
+            ],
+        )
+        words = [
+            word("Neighbor", 1, 12, 35, 18),
+            word("Description", 45, 1, 67, 8),
+            word("A", 72, 1, 80, 8),
+            word("B", 87, 1, 95, 8),
+            word("First item", 45, 12, 67, 18),
+            word("yes", 72, 12, 80, 18),
+            word("no", 87, 12, 95, 18),
+            word("Second item", 45, 22, 67, 28),
+            word("no", 72, 22, 80, 28),
+            word("yes", 87, 22, 95, 28),
+        ]
+
+        headers, rows, _, consumed = _reconstruct_pdf_table(
+            table,
+            words,
+            table_boxes=[(0, 10, 40, 30), tuple(table.bbox)],
+        )
+
+        self.assertEqual(headers, ["Description", "A", "B"])
+        self.assertEqual(
+            rows,
+            [
+                ["First item", "yes", "no"],
+                ["Second item", "no", "yes"],
+            ],
+        )
+        self.assertFalse(any(key[0] == "Neighbor" for key in consumed))
 
     def test_reconstruction_restores_missing_edge_column_and_headers(self):
         table = SimpleNamespace(

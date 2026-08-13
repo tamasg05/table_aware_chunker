@@ -138,6 +138,41 @@ class AudiModelPdfRegressionTests(unittest.TestCase):
         self.assertEqual(performance["Teljesítmény kW (LE)"], "471 (640)")
         self.assertEqual(performance[PRICE_HEADER], "63837690")
 
+    def test_q8_page_five_side_by_side_tables_keep_description_columns(self):
+        tables = [
+            block
+            for block in self.blocks_by_file["Q8.pdf"]
+            if block.get("type") == "table" and block.get("page") == 5
+        ]
+
+        self.assertEqual(len(tables), 2)
+        self.assertTrue(all(len(table["headers"]) == 8 for table in tables))
+        self.assertTrue(
+            all(
+                table["headers"][0] == "Az alapfelszereltség megnevezése"
+                for table in tables
+            )
+        )
+        right_table = next(
+            table for table in tables if table["table_id"].endswith("table-2")
+        )
+        self.assertEqual(
+            right_table["rows"][0][0],
+            "Gumiabroncs 285/45 R21 113Y xl csökkentett gördülési ellenállású",
+        )
+        self.assertEqual(
+            right_table["rows"][1][0],
+            "Jelölés nélkül: teljesítmény, technológia megjelölés nélkül",
+        )
+        page_paragraphs = [
+            block.get("text", "")
+            for block in self.blocks_by_file["Q8.pdf"]
+            if block.get("page") == 5 and block.get("type") == "paragraph"
+        ]
+        self.assertFalse(
+            any(text.startswith("Gumiabroncs 285/45") for text in page_paragraphs)
+        )
+
     def test_price_row_reaches_structure_aware_chunks(self):
         table = next(
             table
