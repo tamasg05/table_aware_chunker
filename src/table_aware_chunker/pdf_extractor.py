@@ -20,7 +20,7 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v9-pdf-text-paragraphs"
+PDF_CORPUS_VERSION = "v11-pdf-labeled-multi-column-tables"
 
 _GROUPED_NUMBER = re.compile(r"(?<!\w)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\w)")
 
@@ -445,11 +445,11 @@ def _positioned_line_groups(
     ]
 
 
-def _line_column_gutter(line: Sequence[dict]) -> tuple[float, float] | None:
-    """Return the strongest whitespace gutter separating one line's columns."""
+def _line_column_gutters(line: Sequence[dict]) -> list[tuple[float, float]]:
+    """Return the wide whitespace gutters separating one line's columns."""
     ordered = sorted(line, key=lambda item: float(item["x0"]))
     if len(ordered) < 2:
-        return None
+        return []
     gaps = [
         (
             float(right["x0"]) - float(left["x1"]),
@@ -458,9 +458,6 @@ def _line_column_gutter(line: Sequence[dict]) -> tuple[float, float] | None:
         )
         for left, right in zip(ordered, ordered[1:])
     ]
-    positive_gaps = [gap for gap, _, _ in gaps if gap > 0]
-    if not positive_gaps:
-        return None
     word_heights = [
         float(word["bottom"]) - float(word["top"])
         for word in ordered
@@ -468,10 +465,73 @@ def _line_column_gutter(line: Sequence[dict]) -> tuple[float, float] | None:
     minimum = max(
         6.0,
         statistics.median(word_heights) * 0.6,
-        statistics.median(positive_gaps) * 2.5,
     )
-    gap, left, right = max(gaps, key=lambda item: item[0])
-    return (left, right) if gap >= minimum else None
+    return [
+        (left, right)
+        for gap, left, right in gaps
+        if gap >= minimum
+    ]
+
+
+def _refine_column_gutters(
+    gutters: Sequence[tuple[float, float]],
+    candidates: Sequence[tuple[float, float]],
+) -> tuple[list[tuple[float, float]], int]:
+    """Intersect recurring gutters while retaining temporarily absent ones."""
+    refined: list[tuple[float, float]] = []
+    used_candidates: set[int] = set()
+    match_count = 0
+    for gutter_left, gutter_right in gutters:
+        matches = [
+            (
+                min(gutter_right, candidate_right)
+                - max(gutter_left, candidate_left),
+                index,
+                candidate_left,
+                candidate_right,
+            )
+            for index, (candidate_left, candidate_right) in enumerate(candidates)
+            if index not in used_candidates
+        ]
+        overlap, index, candidate_left, candidate_right = max(
+            matches,
+            default=(float("-inf"), -1, 0.0, 0.0),
+            key=lambda item: item[0],
+        )
+        if overlap >= 4.0:
+            refined.append(
+                (
+                    max(gutter_left, candidate_left),
+                    min(gutter_right, candidate_right),
+                )
+            )
+            used_candidates.add(index)
+            match_count += 1
+        else:
+            refined.append((gutter_left, gutter_right))
+    return refined, match_count
+
+
+def _line_fits_one_column(
+    line: Sequence[dict], gutters: Sequence[tuple[float, float]]
+) -> bool:
+    """Return whether a line without visible gutters stays inside one column."""
+    dividers = [(left + right) / 2 for left, right in gutters]
+    column_indexes = {
+        sum(_word_center(word)[0] >= divider for divider in dividers)
+        for word in line
+    }
+    if len(column_indexes) != 1:
+        return False
+    column = next(iter(column_indexes))
+    left_bound = dividers[column - 1] if column else float("-inf")
+    right_bound = (
+        dividers[column] if column < len(dividers) else float("inf")
+    )
+    return (
+        min(float(word["x0"]) for word in line) >= left_bound - 1.0
+        and max(float(word["x1"]) for word in line) <= right_bound + 1.0
+    )
 
 
 def _group_pdf_text_lines(
@@ -480,10 +540,10 @@ def _group_pdf_text_lines(
     """
     Reconstruct page text while reading recurring columns independently.
 
-    Two or more consecutive visual lines whose strongest whitespace gaps
-    overlap are treated as a column region. The left column is emitted from
-    top to bottom before the right column. Full-width text before and after the
-    region retains its ordinary geometric order.
+    Two or more consecutive visual lines whose wide whitespace gutters overlap
+    are treated as a column region. Every resulting column is emitted from top
+    to bottom, proceeding from the leftmost column to the rightmost column.
+    Full-width text before and after the region retains its geometric order.
     """
     lines = _positioned_line_groups(words, tolerance)
     result: list[dict] = []
@@ -519,65 +579,93 @@ def _group_pdf_text_lines(
 
     index = 0
     while index < len(lines):
-        gutter = _line_column_gutter(lines[index])
-        if gutter is None:
+        gutters = _line_column_gutters(lines[index])
+        if not gutters or index + 1 >= len(lines):
             append_full_width_line(lines[index])
             index += 1
             continue
 
-        gutter_left, gutter_right = gutter
-        end = index + 1
+        next_line = lines[index + 1]
+        next_top = min(float(word["top"]) for word in next_line)
         previous_bottom = max(float(word["bottom"]) for word in lines[index])
+        typical_height = statistics.median(
+            float(word["bottom"]) - float(word["top"])
+            for word in next_line
+        )
+        next_gutters = _line_column_gutters(next_line)
+        active_gutters, initial_matches = _refine_column_gutters(
+            gutters, next_gutters
+        )
+        if (
+            next_top - previous_bottom > max(8.0, typical_height * 1.5)
+            or initial_matches != len(gutters)
+            or initial_matches != len(next_gutters)
+        ):
+            append_full_width_line(lines[index])
+            index += 1
+            continue
+
+        end = index + 2
+        previous_bottom = max(float(word["bottom"]) for word in next_line)
         while end < len(lines):
-            next_gutter = _line_column_gutter(lines[end])
-            next_top = min(float(word["top"]) for word in lines[end])
+            candidate_line = lines[end]
+            next_top = min(float(word["top"]) for word in candidate_line)
             typical_height = statistics.median(
                 float(word["bottom"]) - float(word["top"])
-                for word in lines[end]
+                for word in candidate_line
             )
-            if (
-                next_gutter is None
-                or next_top - previous_bottom > max(8.0, typical_height * 1.5)
+            if next_top - previous_bottom > max(8.0, typical_height * 1.5):
+                break
+
+            refined, matches = _refine_column_gutters(
+                active_gutters, _line_column_gutters(candidate_line)
+            )
+            if not matches and not _line_fits_one_column(
+                candidate_line, active_gutters
             ):
                 break
-            overlap_left = max(gutter_left, next_gutter[0])
-            overlap_right = min(gutter_right, next_gutter[1])
-            if overlap_right - overlap_left < 4.0:
-                break
-            gutter_left, gutter_right = overlap_left, overlap_right
-            previous_bottom = max(float(word["bottom"]) for word in lines[end])
+            active_gutters = refined
+            previous_bottom = max(
+                float(word["bottom"]) for word in candidate_line
+            )
             end += 1
 
-        if end - index < 2:
-            append_full_width_line(lines[index])
-            index += 1
-            continue
-
-        divider = (gutter_left + gutter_right) / 2
+        dividers = [
+            (gutter_left + gutter_right) / 2
+            for gutter_left, gutter_right in active_gutters
+        ]
         first_top = min(float(word["top"]) for word in lines[index])
-        for side_number, side in enumerate(("left", "right")):
+        for column in range(len(dividers) + 1):
             selected_lines: list[str] = []
             for line in lines[index:end]:
                 selected = [
                     word
                     for word in line
-                    if (_word_center(word)[0] < divider) == (side == "left")
+                    if sum(
+                        _word_center(word)[0] >= divider
+                        for divider in dividers
+                    )
+                    == column
                 ]
                 if selected:
                     selected_lines.append(_positioned_words_text(selected))
             if selected_lines:
+                column_words = [
+                    word
+                    for line in lines[index:end]
+                    for word in line
+                    if sum(
+                        _word_center(word)[0] >= divider
+                        for divider in dividers
+                    )
+                    == column
+                ]
                 result.append(
                     {
                         "kind": "column",
-                        "top": first_top + side_number * 0.001,
+                        "top": first_top + column * 0.001,
                         "bottom": previous_bottom,
-                        "left": min(
-                            float(word["x0"])
-                            for line in lines[index:end]
-                            for word in line
-                            if (_word_center(word)[0] < divider)
-                            == (side == "left")
-                        ),
+                        "left": min(float(word["x0"]) for word in column_words),
                         "text": _join_wrapped_pdf_lines(selected_lines),
                     }
                 )
@@ -779,7 +867,7 @@ def _reconstruct_pdf_table(
     table,
     words: Sequence[dict],
     table_boxes: Sequence[tuple] = (),
-    reconstruction_info: dict[str, bool] | None = None,
+    reconstruction_info: dict[str, object] | None = None,
 ) -> tuple[list[str], list[list[str]], list[tuple[float, str]], set[tuple]]:
     """
     Reconstruct a detected table from page word geometry.
@@ -858,7 +946,9 @@ def _reconstruct_pdf_table(
         return [], [], [], set()
 
     rows: list[list[str]] = []
+    row_positions: list[float] = []
     section_rows: list[tuple[float, str]] = []
+    multi_column_section_groups: list[list[tuple[float, str]]] = []
     consumed_words: set[tuple] = set()
     for table_row in table.rows:
         cells = [cell for cell in table_row.cells if cell is not None]
@@ -881,22 +971,32 @@ def _reconstruct_pdf_table(
             and float(cells[0][2]) - float(cells[0][0])
             >= float(table.bbox[2]) - float(table.bbox[0]) - 1.0
         )
-        complete_row_text = _positioned_words_text(
-            _words_in_box(words, (columns[0], row_top, columns[-1], row_bottom))
+        complete_row_words = _words_in_box(
+            words, (columns[0], row_top, columns[-1], row_bottom)
         )
+        complete_row_text = _positioned_words_text(complete_row_words)
         if merged_across_table and complete_row_text:
-            section_rows.append(
-                (
-                    row_top,
-                    complete_row_text,
+            reconstructed_sections = _group_pdf_text_lines(complete_row_words)
+            if len(reconstructed_sections) == 1:
+                section_rows.append((row_top, reconstructed_sections[0][1]))
+            else:
+                if (
+                    reconstructed_sections
+                    and max(top for top, _ in reconstructed_sections)
+                    - min(top for top, _ in reconstructed_sections)
+                    <= 0.01
+                ):
+                    multi_column_section_groups.append(reconstructed_sections)
+                section_rows.extend(
+                    reconstructed_sections or [(row_top, complete_row_text)]
                 )
-            )
             continue
 
         for values in _split_physical_table_row(cell_words):
             populated = [value for value in values if value]
             if len(columns) == 2 or len(populated) >= 2:
                 rows.append(values)
+                row_positions.append(row_top)
             elif populated:
                 section_rows.append((row_top, populated[0]))
 
@@ -932,6 +1032,30 @@ def _reconstruct_pdf_table(
         header = _positioned_words_text(selected)
         headers.append(header or f"Column {index + 1}")
         selected_header_words.append(selected)
+
+    # Narrow visual gaps between separately colored cells can be returned as
+    # empty columns. Remove only generic columns that contain no value in any
+    # physical row; named but empty semantic columns remain intact.
+    retained_columns = [
+        index
+        for index, header in enumerate(headers)
+        if not (
+            header.startswith("Column ")
+            and rows
+            and all(not clean_text(row[index]) for row in rows)
+        )
+    ]
+    if retained_columns and len(retained_columns) < len(headers):
+        headers = [headers[index] for index in retained_columns]
+        selected_header_words = [
+            selected_header_words[index] for index in retained_columns
+        ]
+        rows = [
+            [row[index] for index in retained_columns]
+            for row in rows
+        ]
+        if reconstruction_info is not None:
+            reconstruction_info["removed_empty_columns"] = True
 
     # A detector can begin at the top of the visible header row rather than
     # above it. Promote a dense first row when external header recovery is
@@ -970,16 +1094,40 @@ def _reconstruct_pdf_table(
             populated >= required and generic_headers * 2 >= len(headers)
         ) or (prose_external_headers and compact_header)
         if should_promote:
+            promoted_top = row_positions[0]
             headers = [
                 value or f"Column {index + 1}"
                 for index, value in enumerate(candidate)
             ]
             rows = rows[1:]
+            row_positions = row_positions[1:]
             promoted_header = True
             if reconstruction_info is not None:
                 reconstruction_info["promoted_internal_header"] = True
+                reconstruction_info["semantic_table_top"] = promoted_top
                 if prose_external_headers:
                     reconstruction_info["rejected_prose_headers"] = True
+
+    # A header-only detected grid can be followed by a visually merged row
+    # containing one independent text list per header. When gutter detection
+    # reconstructs exactly one text region for each promoted header, retain
+    # their relationship as a semantic table row instead of unlabeled blocks.
+    if promoted_header and not rows:
+        matching_group = next(
+            (
+                group
+                for group in multi_column_section_groups
+                if len(group) == len(headers)
+            ),
+            None,
+        )
+        if matching_group is not None:
+            rows.append([text for _, text in matching_group])
+            row_positions.append(min(top for top, _ in matching_group))
+            for section in matching_group:
+                section_rows.remove(section)
+            if reconstruction_info is not None:
+                reconstruction_info["attached_multi_column_sections"] = True
 
     if not promoted_header or not prose_external_headers:
         consumed_words.update(
@@ -1007,6 +1155,7 @@ def _reconstruct_pdf_table(
         required = max(2, (3 * len(headers) + 3) // 4)
         while rows and sum(bool(value) for value in rows[-1]) < required:
             rows.pop()
+            row_positions.pop()
     return headers, rows, section_rows, consumed_words
 
 
@@ -1084,12 +1233,12 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                     list[str],
                     list[list[str]],
                     list[tuple[float, str]],
-                    dict[str, bool],
+                    dict[str, object],
                 ]
             ] = []
             consumed_table_words: set[tuple] = set()
             for table_number, table in enumerate(found_tables, start=1):
-                reconstruction_info: dict[str, bool] = {}
+                reconstruction_info: dict[str, object] = {}
                 try:
                     headers, rows, section_rows, used_header_words = (
                         _reconstruct_pdf_table(
@@ -1194,7 +1343,16 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                         page=page_number,
                     )
                     block["bbox"] = [round(float(value), 2) for value in table.bbox]
-                    positioned.append((float(table.bbox[1]), block))
+                    positioned.append(
+                        (
+                            float(
+                                reconstruction_info.get(
+                                    "semantic_table_top", table.bbox[1]
+                                )
+                            ),
+                            block,
+                        )
+                    )
                 for section_top, section_text in section_rows:
                     if (section_top, section_text) == caption_source:
                         continue

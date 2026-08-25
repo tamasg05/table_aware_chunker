@@ -45,3 +45,9 @@ Five additional public Audi price lists are used to test long documents:
 | `A6_Limousine.pdf` | `2fb3ff2c374d88131a7e3e3353ef17dc6bc7e77838a471b95c73293a008dda60` |
 | `Q4_Sportback_e-tron.pdf` | `c8073d976b9228d07a6ce5c2a7824e7a8c924b3b6428625e8388ae64fdae223b` |
 | `Q8.pdf` | `0858e1fb90400f3d49d52da7061d06ef647634f7bd0add07d74db3a7415c5567` |
+
+The Citroën C3 Aircross price list exercises text arranged in three
+side-by-side columns, including columns containing different numbers of lines.
+
+SHA-256:
+`588a4eecc047163600e860e664c69bff1ca80a3e1aca2a73c34d1acc59c49be8`

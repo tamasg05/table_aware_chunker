@@ -33,6 +33,110 @@ def word(text, x0, top, x1, bottom):
 
 
 class PdfExtractorTests(unittest.TestCase):
+    def test_reconstruction_removes_empty_internal_spacer_columns(self):
+        boundaries = (0, 20, 24, 44, 48, 68, 72, 92)
+        table = SimpleNamespace(
+            bbox=(0, 0, 92, 20),
+            rows=[
+                SimpleNamespace(
+                    cells=[
+                        (boundaries[index], top, boundaries[index + 1], bottom)
+                        for index in range(7)
+                    ]
+                )
+                for top, bottom in ((0, 10), (10, 20))
+            ],
+        )
+        words = [
+            word("Motor", 2, 1, 15, 8),
+            word("YOU", 27, 1, 38, 8),
+            word("PLUS", 51, 1, 64, 8),
+            word("MAX", 75, 1, 87, 8),
+            word("Petrol", 2, 11, 16, 18),
+            word("100", 27, 11, 38, 18),
+            word("200", 51, 11, 62, 18),
+            word("300", 75, 11, 86, 18),
+        ]
+        reconstruction_info: dict[str, object] = {}
+
+        headers, rows, sections, _ = _reconstruct_pdf_table(
+            table,
+            words,
+            reconstruction_info=reconstruction_info,
+        )
+
+        self.assertEqual(headers, ["Motor", "YOU", "PLUS", "MAX"])
+        self.assertEqual(rows, [["Petrol", "100", "200", "300"]])
+        self.assertEqual(sections, [])
+        self.assertTrue(reconstruction_info["removed_empty_columns"])
+        self.assertTrue(reconstruction_info["promoted_internal_header"])
+
+    def test_reconstruction_attaches_labeled_multi_column_section(self):
+        boundaries = (0, 30, 35, 65, 70, 100)
+        table = SimpleNamespace(
+            bbox=(0, 0, 100, 40),
+            rows=[
+                SimpleNamespace(
+                    cells=[
+                        (boundaries[index], 0, boundaries[index + 1], 10)
+                        for index in range(5)
+                    ]
+                ),
+                SimpleNamespace(cells=[(0, 10, 100, 40), None, None, None, None]),
+            ],
+        )
+        words = [
+            word("YOU", 3, 1, 15, 8),
+            word("PLUS", 40, 1, 55, 8),
+            word("MAX", 75, 1, 88, 8),
+            word("You-1", 3, 12, 15, 18),
+            word("Plus-1", 40, 12, 54, 18),
+            word("Max-1", 75, 12, 88, 18),
+            word("You-2", 3, 22, 15, 28),
+            word("Plus-2", 40, 22, 54, 28),
+            word("Max-2", 75, 22, 88, 28),
+        ]
+        reconstruction_info: dict[str, object] = {}
+
+        headers, rows, sections, _ = _reconstruct_pdf_table(
+            table,
+            words,
+            reconstruction_info=reconstruction_info,
+        )
+
+        self.assertEqual(headers, ["YOU", "PLUS", "MAX"])
+        self.assertEqual(
+            rows,
+            [["You-1 You-2", "Plus-1 Plus-2", "Max-1 Max-2"]],
+        )
+        self.assertEqual(sections, [])
+        self.assertTrue(reconstruction_info["attached_multi_column_sections"])
+
+    def test_three_or_more_text_columns_are_read_left_to_right(self):
+        words = [
+            word("First-1", 0, 0, 12, 8),
+            word("Second-1", 30, 0, 44, 8),
+            word("Third-1", 60, 0, 72, 8),
+            word("Fourth-1", 90, 0, 104, 8),
+            word("First-2", 0, 10, 12, 18),
+            word("Second-2", 30, 10, 44, 18),
+            word("Third-2", 60, 10, 72, 18),
+            word("Fourth-2", 90, 10, 104, 18),
+            word("First-3", 0, 20, 12, 28),
+            word("Second-3", 30, 20, 44, 28),
+            word("Third-3", 60, 20, 72, 28),
+        ]
+
+        self.assertEqual(
+            [text for _, text in _group_pdf_text_lines(words)],
+            [
+                "First-1 First-2 First-3",
+                "Second-1 Second-2 Second-3",
+                "Third-1 Third-2 Third-3",
+                "Fourth-1 Fourth-2",
+            ],
+        )
+
     def test_side_by_side_text_columns_are_read_one_column_at_a_time(self):
         words = [
             word("Left", 0, 0, 12, 8),
@@ -400,7 +504,7 @@ class PdfExtractorTests(unittest.TestCase):
             word("200", 205, 125, 245, 132),
             word("300", 305, 125, 345, 132),
         ]
-        reconstruction_info: dict[str, bool] = {}
+        reconstruction_info: dict[str, object] = {}
 
         headers, rows, _, consumed = _reconstruct_pdf_table(
             table,

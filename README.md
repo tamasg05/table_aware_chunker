@@ -123,11 +123,12 @@ construction.
    type.
 3. Reconstruct selected complex PDF table layouts, including missing borders or
    separator lines, unruled leading columns, rotated headings, side-by-side
-   tables, and visually merged rows.
-4. Process PDF text arranged in two side-by-side columns by detecting the
-   whitespace gutter between them, reading the left column before the right
-   column, and joining each column's wrapped visual lines into a coherent
-   paragraph.
+   tables, detector-created empty spacer columns, and visually merged rows
+   containing labeled multi-column text.
+4. Process PDF text arranged in two or more side-by-side columns by detecting
+   the recurring whitespace gutters between them, reading every column from
+   top to bottom in left-to-right order, and joining each column's wrapped
+   visual lines into a coherent paragraph.
 5. Convert HTML headings, paragraphs, lists, quotations, preformatted text, and
    tables into the common block format, including expansion of `rowspan` and
    `colspan` cells.
@@ -456,15 +457,7 @@ Beautiful Soup dependencies are distributed under the MIT License.
    also be retained as metadata when the exact source layout needs to be
    reconstructed.
 
-4. **Support text layouts with three or more columns.** The current PDF text
-   extraction detects one recurring whitespace gutter and therefore separates
-   a region into two columns. A page containing three or more side-by-side text
-   columns has multiple gutters, so some columns could still be combined or
-   read in the wrong order. Future extraction should detect every recurring
-   gutter in the region and read each resulting column from top to bottom,
-   proceeding from the leftmost column to the rightmost column.
-
-5. **Support additional chunking strategies.** Currently,
+4. **Support additional chunking strategies.** Currently,
    `strategy="words"` divides ordinary text by word count while preserving table
    rows. Additional strategies could split prose at sentence or paragraph
    boundaries, use the tokenizer of a selected embedding model, or respect
