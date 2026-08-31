@@ -157,7 +157,10 @@ construction.
     surrounding punctuation. When a particular row has an empty cell, that
     column is omitted from the row's serialized representations instead of
     producing an empty `column = value` assignment.
-14. Perform extraction and chunking without AI models or model API calls.
+14. Expose extraction and chunking through an optional stateless REST service,
+    allowing applications without a Python runtime to use the library over
+    HTTP.
+15. Perform extraction and chunking without AI models or model API calls.
 
 ## Installation
 
@@ -262,6 +265,26 @@ defaults.
 The Java example automatically selects `.venv/Scripts/python.exe` on Windows or
 `.venv/bin/python` on Linux and macOS. The package must already be installed in
 that virtual environment as described under [Installation](#installation).
+
+## REST Wrapper
+
+The `rest-wrapper` directory provides a stateless FastAPI wrapper around
+`extract_corpus()` and `build_chunks()`. FastAPI is a Python framework for
+building HTTP APIs; here, it exposes the library's Python operations as REST
+endpoints that other applications can call over the network. This allows
+applications without a Python runtime to upload PDFs and create
+structure-aware chunks over HTTP. Extraction responses contain the blocks,
+readable corpus text, source metadata, and corpus identifiers, so no access to
+data stored on the REST service's file system is required.
+
+For a simple environment, the supplied Dockerfile can run `app.py` in one
+container and expose it on a host port. Kubernetes is optional; the supplied
+manifest adds cluster service discovery, probes, resource controls, and
+deployment management when those capabilities are useful. Installation,
+endpoint, Docker, Kubernetes, configuration, and security instructions are
+documented in the [`rest-wrapper/README.md`](rest-wrapper/README.md) file. The
+REST service must be started as described in that file before a client
+application can call its endpoints.
 
 ## How `pdfplumber` is used
 

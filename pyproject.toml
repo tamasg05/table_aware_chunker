@@ -23,6 +23,16 @@ dependencies = [
     "pdfplumber>=0.11,<1",
 ]
 
+[project.optional-dependencies]
+rest = [
+    "fastapi>=0.115,<1",
+    "python-multipart>=0.0.20,<1",
+    "uvicorn>=0.34,<1",
+]
+rest-test = [
+    "httpx>=0.28,<1",
+]
+
 [project.urls]
 Repository = "https://github.com/tamasg05/table_aware_chunker"
 
