@@ -302,6 +302,55 @@ class PdfExtractorTests(unittest.TestCase):
             ],
         )
 
+    def test_reconstruction_propagates_a_proven_vertical_cell_span(self):
+        table = SimpleNamespace(
+            bbox=(0, 10, 100, 30),
+            rows=[
+                SimpleNamespace(
+                    cells=[
+                        (0, 10, 30, 30),
+                        (30, 10, 70, 20),
+                        (70, 10, 100, 20),
+                    ]
+                ),
+                SimpleNamespace(
+                    cells=[
+                        None,
+                        (30, 20, 70, 30),
+                        (70, 20, 100, 30),
+                    ]
+                ),
+            ],
+        )
+        words = [
+            word("Category", 2, 1, 20, 8),
+            word("Item", 35, 1, 50, 8),
+            word("Price", 75, 1, 92, 8),
+            word("Category A", 2, 12, 24, 18),
+            word("First", 35, 12, 50, 18),
+            word("100", 75, 12, 90, 18),
+            word("Second", 35, 22, 55, 28),
+            word("200", 75, 22, 90, 28),
+        ]
+        reconstruction_info: dict[str, object] = {}
+
+        headers, rows, sections, _ = _reconstruct_pdf_table(
+            table,
+            words,
+            reconstruction_info=reconstruction_info,
+        )
+
+        self.assertEqual(headers, ["Category", "Item", "Price"])
+        self.assertEqual(
+            rows,
+            [
+                ["Category A", "First", "100"],
+                ["Category A", "Second", "200"],
+            ],
+        )
+        self.assertEqual(sections, [])
+        self.assertTrue(reconstruction_info["propagated_vertical_cells"])
+
     def test_reconstruction_does_not_cross_a_side_by_side_table(self):
         table = SimpleNamespace(
             bbox=(50, 10, 100, 20),

@@ -20,7 +20,7 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v11-pdf-labeled-multi-column-tables"
+PDF_CORPUS_VERSION = "v12-pdf-vertical-cell-spans"
 
 _GROUPED_NUMBER = re.compile(r"(?<!\w)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\w)")
 
@@ -828,6 +828,61 @@ def _split_physical_table_row(cell_words: Sequence[Sequence[dict]]) -> list[list
     return split_rows
 
 
+def _vertically_merged_cell_words(
+    words: Sequence[dict],
+    cells: Sequence[tuple],
+    row_starts: Sequence[float],
+    column: tuple[float, float],
+    row_band: tuple[float, float],
+    tolerance: float = 1.5,
+) -> list[dict]:
+    """
+    Recover the complete value of a cell spanning several physical rows.
+
+    ``pdfplumber`` groups cells by their top coordinate. A vertically merged
+    cell therefore appears in the first physical row and as ``None`` in later
+    rows covered by the same cell. Geometry is used here instead of blindly
+    forward-filling empty values: the source cell must match one reconstructed
+    column, cover the current row band, and cross another detected row start.
+
+    Inputs:
+        words: Positioned words from the complete page.
+        cells: Every non-empty cell bounding box in the detected table.
+        row_starts: Ordered top coordinates of the physical table rows.
+        column: Left and right boundaries of one reconstructed column.
+        row_band: Top and bottom boundaries of the current physical row.
+        tolerance: Coordinate tolerance for matching PDF drawing lines.
+
+    Returns:
+        Words from the complete vertically merged cell, or an empty list when
+        the current column is not covered by a proven vertical span.
+    """
+    column_left, column_right = column
+    row_top, row_bottom = row_band
+    for cell in cells:
+        cell_left, cell_top, cell_right, cell_bottom = map(float, cell)
+        if (
+            abs(cell_left - column_left) > tolerance
+            or abs(cell_right - column_right) > tolerance
+            or cell_top > row_top + tolerance
+            or cell_bottom < row_bottom - tolerance
+        ):
+            continue
+        crosses_row_boundary = any(
+            cell_top + tolerance < start < cell_bottom - tolerance
+            for start in row_starts
+        )
+        if not crosses_row_boundary:
+            continue
+        selected = _words_in_box(
+            words,
+            (column_left, cell_top, column_right, cell_bottom),
+        )
+        if _positioned_words_text(selected):
+            return selected
+    return []
+
+
 def _nearest_upright_header_words(words: Sequence[dict]) -> list[dict]:
     """
     Keep the closest contiguous upright text block above a table.
@@ -892,17 +947,22 @@ def _reconstruct_pdf_table(
     """
     coordinates = [float(table.bbox[0]), float(table.bbox[2])]
     row_bands: list[tuple[float, float]] = []
+    physical_rows: list[tuple[float, object, list[tuple]]] = []
+    table_cells: list[tuple] = []
     for table_row in table.rows:
         present_cells = [cell for cell in table_row.cells if cell is not None]
         if present_cells:
-            row_bands.append(
-                (
-                    min(float(cell[1]) for cell in present_cells),
-                    max(float(cell[3]) for cell in present_cells),
-                )
+            row_top = min(float(cell[1]) for cell in present_cells)
+            row_bottom = max(float(cell[3]) for cell in present_cells)
+            row_bands.append((row_top, row_bottom))
+            physical_rows.append(
+                (row_top, table_row, present_cells)
             )
+            table_cells.extend(present_cells)
         for cell in present_cells:
             coordinates.extend((float(cell[0]), float(cell[2])))
+    physical_rows.sort(key=lambda item: item[0])
+    row_starts = [row_top for row_top, _, _ in physical_rows]
 
     # A table detector may omit an unruled edge column entirely. Words aligned
     # with detected rows reveal and restore such a column, as happens with the
@@ -950,12 +1010,14 @@ def _reconstruct_pdf_table(
     section_rows: list[tuple[float, str]] = []
     multi_column_section_groups: list[list[tuple[float, str]]] = []
     consumed_words: set[tuple] = set()
-    for table_row in table.rows:
-        cells = [cell for cell in table_row.cells if cell is not None]
-        if not cells:
-            continue
-        row_top = min(float(cell[1]) for cell in cells)
-        row_bottom = max(float(cell[3]) for cell in cells)
+    for row_index, (row_top, _, cells) in enumerate(physical_rows):
+        natural_bottom = max(float(cell[3]) for cell in cells)
+        next_row_top = (
+            physical_rows[row_index + 1][0]
+            if row_index + 1 < len(physical_rows)
+            else natural_bottom
+        )
+        row_bottom = min(natural_bottom, next_row_top)
         cell_words = [
             _words_in_box(
                 words,
@@ -963,6 +1025,20 @@ def _reconstruct_pdf_table(
             )
             for index in range(len(columns) - 1)
         ]
+        propagated_vertical_span = False
+        for column_index in range(len(columns) - 1):
+            spanning_words = _vertically_merged_cell_words(
+                words,
+                table_cells,
+                row_starts,
+                (columns[column_index], columns[column_index + 1]),
+                (row_top, row_bottom),
+            )
+            if spanning_words:
+                cell_words[column_index] = spanning_words
+                propagated_vertical_span = True
+        if propagated_vertical_span and reconstruction_info is not None:
+            reconstruction_info["propagated_vertical_cells"] = True
         consumed_words.update(
             _word_key(word) for selected_words in cell_words for word in selected_words
         )

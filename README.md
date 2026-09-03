@@ -124,7 +124,9 @@ construction.
 3. Reconstruct selected complex PDF table layouts, including missing borders or
    separator lines, unruled leading columns, rotated headings, side-by-side
    tables, detector-created empty spacer columns, and visually merged rows
-   containing labeled multi-column text.
+   containing labeled multi-column text. Values from cells that geometrically
+   span several rows are repeated in every covered logical row, allowing each
+   row to remain understandable on its own.
 4. Process PDF text arranged in two or more side-by-side columns by detecting
    the recurring whitespace gutters between them, reading every column from
    top to bottom in left-to-right order, and joining each column's wrapped
@@ -458,15 +460,7 @@ Beautiful Soup dependencies are distributed under the MIT License.
    must continue to respect structural boundaries: blocks should not be joined
    blindly across pages, tables, sources, or unrelated sections.
 
-2. **Propagate vertically merged labels to their logical rows.** Some tables
-   display an equipment level or category in a cell that visually spans several
-   rows. PDF extraction may place that label only in the first row and leave the
-   corresponding cell empty in the rows below. For example, one `Category A`
-   label may apply to several item rows. The extractor should repeat `Category
-   A` in every resulting logical row so each item remains understandable when
-   retrieved without the surrounding rows.
-
-3. **Represent cells spanning several columns explicitly.** A value centered
+2. **Represent cells spanning several columns explicitly.** A value centered
    across two or more columns usually applies to every column covered by that
    visual span. A basic rectangular extraction may place the value in the first
    column and leave the other covered cells empty, making those columns appear
@@ -480,7 +474,7 @@ Beautiful Soup dependencies are distributed under the MIT License.
    also be retained as metadata when the exact source layout needs to be
    reconstructed.
 
-4. **Support additional chunking strategies.** Currently,
+3. **Support additional chunking strategies.** Currently,
    `strategy="words"` divides ordinary text by word count while preserving table
    rows. Additional strategies could split prose at sentence or paragraph
    boundaries, use the tokenizer of a selected embedding model, or respect

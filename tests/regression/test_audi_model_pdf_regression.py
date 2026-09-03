@@ -106,6 +106,28 @@ class AudiModelPdfRegressionTests(unittest.TestCase):
         self.assertEqual(row["Fogyasztás (l/100 km) *"], "0.7 l/100km")
         self.assertEqual(row[PRICE_HEADER], "28944060")
 
+    def test_a5_page_thirteen_repeats_vertically_merged_wheel_labels(self):
+        left_table = next(
+            block
+            for block in self.blocks_by_file["A5_Avant.pdf"]
+            if block.get("type") == "table"
+            and block.get("page") == 13
+            and block.get("table_id", "").endswith("table-1")
+        )
+        u36_rows = [row for row in left_table["rows"] if row[1] == "U36"]
+        expected_label = (
+            "Kerék: 8,5Jx20 5-ágú Falx-dizájn, szürke matt selyem, "
+            "polírozott, Audi Sport könnyűfém keréktárcsa, 245/35 R20 "
+            "gumiabroncsokkal"
+        )
+
+        self.assertEqual(len(u36_rows), 5)
+        self.assertTrue(all(row[0] == expected_label for row in u36_rows))
+        self.assertEqual(
+            [row[-1] for row in u36_rows],
+            ["642620", "679450", "690880", "1026160", "1553210"],
+        )
+
     def test_a6_petrol_quattro_row(self):
         row = self._price_row(
             "A6_Limousine.pdf", "A6 Limousine 55 TFSI quattro S tronic"
