@@ -351,6 +351,111 @@ class PdfExtractorTests(unittest.TestCase):
         self.assertEqual(sections, [])
         self.assertTrue(reconstruction_info["propagated_vertical_cells"])
 
+    def test_reconstruction_expands_a_proven_horizontal_cell_span(self):
+        table = SimpleNamespace(
+            bbox=(0, 0, 40, 30),
+            rows=[
+                SimpleNamespace(
+                    cells=[
+                        (0, 0, 10, 10),
+                        (10, 0, 20, 10),
+                        (20, 0, 30, 10),
+                        (30, 0, 40, 10),
+                    ]
+                ),
+                SimpleNamespace(
+                    cells=[
+                        (0, 10, 10, 20),
+                        (10, 10, 20, 20),
+                        (20, 10, 30, 20),
+                        (30, 10, 40, 20),
+                    ]
+                ),
+                SimpleNamespace(
+                    cells=[
+                        (0, 20, 10, 30),
+                        (10, 20, 20, 30),
+                        (20, 20, 40, 30),
+                        None,
+                    ]
+                ),
+            ],
+        )
+        words = [
+            word("Prices", 1, 1, 9, 8),
+            word("Basic", 11, 1, 19, 8),
+            word("Duo", 21, 1, 29, 8),
+            word("Premium", 31, 1, 39, 8),
+            word("Device", 1, 11, 9, 18),
+            word("100", 11, 11, 19, 18),
+            word("200", 21, 11, 29, 18),
+            word("300", 31, 11, 39, 18),
+            word("Installation", 1, 21, 9, 28),
+            word("150", 11, 21, 19, 28),
+            word("220", 22, 21, 27, 28),
+            word("-", 28, 21, 30, 28),
+            word("290", 32, 21, 38, 28),
+        ]
+        reconstruction_info: dict[str, object] = {}
+
+        headers, rows, sections, _ = _reconstruct_pdf_table(
+            table,
+            words,
+            reconstruction_info=reconstruction_info,
+        )
+
+        self.assertEqual(headers, ["Prices", "Basic", "Duo", "Premium"])
+        self.assertEqual(
+            rows,
+            [
+                ["Device", "100", "200", "300"],
+                ["Installation", "150", "220 - 290", "220 - 290"],
+            ],
+        )
+        self.assertEqual(sections, [])
+        self.assertTrue(reconstruction_info["expanded_horizontal_cells"])
+
+    def test_reconstruction_keeps_separate_values_inside_a_wide_cell(self):
+        table = SimpleNamespace(
+            bbox=(0, 0, 60, 20),
+            rows=[
+                SimpleNamespace(
+                    cells=[
+                        (0, 0, 20, 10),
+                        (20, 0, 40, 10),
+                        (40, 0, 60, 10),
+                    ]
+                ),
+                SimpleNamespace(
+                    cells=[
+                        (0, 10, 40, 20),
+                        None,
+                        (40, 10, 60, 20),
+                    ]
+                ),
+            ],
+        )
+        words = [
+            word("Description", 1, 1, 18, 8),
+            word("A", 25, 1, 30, 8),
+            word("B", 45, 1, 50, 8),
+            word("Item", 1, 11, 10, 18),
+            word("100", 31, 11, 38, 18),
+            word("200", 46, 11, 54, 18),
+        ]
+        reconstruction_info: dict[str, object] = {}
+
+        headers, rows, sections, _ = _reconstruct_pdf_table(
+            table,
+            words,
+            reconstruction_info=reconstruction_info,
+        )
+
+        self.assertEqual(headers, ["Description", "A", "B"])
+        self.assertEqual(rows, [["Item", "100", "200"]])
+        self.assertEqual(sections, [])
+        self.assertNotIn("expanded_horizontal_cells", reconstruction_info)
+
     def test_reconstruction_does_not_cross_a_side_by_side_table(self):
         table = SimpleNamespace(
             bbox=(50, 10, 100, 20),

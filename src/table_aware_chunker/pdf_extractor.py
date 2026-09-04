@@ -20,7 +20,7 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v12-pdf-vertical-cell-spans"
+PDF_CORPUS_VERSION = "v13-pdf-cell-spans"
 
 _GROUPED_NUMBER = re.compile(r"(?<!\w)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\w)")
 
@@ -883,6 +883,103 @@ def _vertically_merged_cell_words(
     return []
 
 
+def _horizontally_merged_cell_words(
+    words: Sequence[dict],
+    cells: Sequence[tuple],
+    column_boundaries: Sequence[float],
+    column: tuple[float, float],
+    row_band: tuple[float, float],
+    tolerance: float = 1.5,
+) -> list[dict]:
+    """
+    Recover the complete value of a cell spanning several logical columns.
+
+    Reconstructed columns can come from header rows even when a data row omits
+    the separator between two or more of those columns. The PDF then contains
+    one wide physical cell. Its complete text is copied into every logical
+    column covered by that cell so each column remains independently useful.
+    Text must continue across the omitted separator; widely separated word
+    groups are retained as distinct values despite sharing one physical box.
+
+    Inputs:
+        words: Positioned words from the complete page.
+        cells: Every non-empty cell bounding box in the detected table.
+        column_boundaries: Ordered boundaries of the reconstructed table grid.
+        column: Left and right boundaries of the current logical column.
+        row_band: Top and bottom boundaries of the current physical row.
+        tolerance: Coordinate tolerance for matching PDF drawing lines.
+
+    Returns:
+        Words from the complete horizontally merged cell, or an empty list
+        when the current logical column is not covered by a proven span.
+    """
+    column_left, column_right = column
+    row_top, row_bottom = row_band
+    for cell in cells:
+        cell_left, cell_top, cell_right, cell_bottom = map(float, cell)
+        if (
+            cell_left > column_left + tolerance
+            or cell_right < column_right - tolerance
+            or cell_top > row_top + tolerance
+            or cell_bottom < row_bottom - tolerance
+        ):
+            continue
+        crosses_column_boundary = any(
+            cell_left + tolerance < boundary < cell_right - tolerance
+            for boundary in column_boundaries[1:-1]
+        )
+        if not crosses_column_boundary:
+            continue
+        selected = _words_in_box(words, tuple(map(float, cell)))
+        if not _positioned_words_text(selected):
+            continue
+        interior_boundaries = [
+            boundary
+            for boundary in column_boundaries[1:-1]
+            if cell_left + tolerance < boundary < cell_right - tolerance
+        ]
+        occupied_columns = {
+            index
+            for word in selected
+            for index in range(len(column_boundaries) - 1)
+            if column_boundaries[index]
+            <= _word_center(word)[0]
+            <= column_boundaries[index + 1]
+        }
+        crosses_text = any(
+            float(word["x0"]) <= boundary <= float(word["x1"])
+            for word in selected
+            for boundary in interior_boundaries
+        )
+        if len(occupied_columns) < 2 and not crosses_text:
+            continue
+
+        heights = [
+            float(word["bottom"]) - float(word["top"])
+            for word in selected
+            if float(word["bottom"]) > float(word["top"])
+        ]
+        maximum_continuous_gap = max(
+            4.0,
+            (statistics.median(heights) if heights else 0.0) * 0.75,
+        )
+        separated_groups = False
+        for boundary in interior_boundaries:
+            left = [word for word in selected if _word_center(word)[0] < boundary]
+            right = [word for word in selected if _word_center(word)[0] >= boundary]
+            if not left or not right:
+                continue
+            gap = min(float(word["x0"]) for word in right) - max(
+                float(word["x1"]) for word in left
+            )
+            if gap > maximum_continuous_gap:
+                separated_groups = True
+                break
+        if not separated_groups:
+            return selected
+    return []
+
+
 def _nearest_upright_header_words(words: Sequence[dict]) -> list[dict]:
     """
     Keep the closest contiguous upright text block above a table.
@@ -1026,6 +1123,7 @@ def _reconstruct_pdf_table(
             for index in range(len(columns) - 1)
         ]
         propagated_vertical_span = False
+        expanded_horizontal_span = False
         for column_index in range(len(columns) - 1):
             spanning_words = _vertically_merged_cell_words(
                 words,
@@ -1037,8 +1135,24 @@ def _reconstruct_pdf_table(
             if spanning_words:
                 cell_words[column_index] = spanning_words
                 propagated_vertical_span = True
+            spanning_words = (
+                _horizontally_merged_cell_words(
+                    words,
+                    table_cells,
+                    columns,
+                    (columns[column_index], columns[column_index + 1]),
+                    (row_top, row_bottom),
+                )
+                if len(cells) >= 2
+                else []
+            )
+            if spanning_words:
+                cell_words[column_index] = spanning_words
+                expanded_horizontal_span = True
         if propagated_vertical_span and reconstruction_info is not None:
             reconstruction_info["propagated_vertical_cells"] = True
+        if expanded_horizontal_span and reconstruction_info is not None:
+            reconstruction_info["expanded_horizontal_cells"] = True
         consumed_words.update(
             _word_key(word) for selected_words in cell_words for word in selected_words
         )

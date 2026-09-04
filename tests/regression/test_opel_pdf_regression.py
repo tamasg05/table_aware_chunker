@@ -114,6 +114,47 @@ class OpelPdfRegressionTests(unittest.TestCase):
         self.assertIn("Listaárak és kedvezményes árak", page_text)
         self.assertNotIn("LLiissttaa", page_text)
 
+    def test_astra_charger_table_expands_values_spanning_two_columns(self):
+        table = next(
+            block
+            for block in self.blocks_by_file["opel_HU_Astra_Electric.pdf"]
+            if block.get("table_id", "").endswith("page-9-table-1")
+        )
+
+        self.assertEqual(
+            table["headers"],
+            ["BRUTTÓ ÁRAK", "STILO", "WALLBOX DUO", "VERTICA DUO"],
+        )
+        self.assertEqual(
+            table["rows"][1],
+            [
+                "TELEPÍTÉS",
+                "299900 Ft",
+                "220000 Ft – 290000 Ft",
+                "220000 Ft – 290000 Ft",
+            ],
+        )
+        self.assertEqual(
+            table["rows"][2],
+            [
+                "ÉVES KARBANTARTÁS",
+                "30000 Ft",
+                "60000 Ft / 120000 Ft*",
+                "60000 Ft / 120000 Ft*",
+            ],
+        )
+
+        chunks = build_chunks(
+            [table], strategy="words", chunk_size=450, chunk_overlap=60
+        )
+        source_text = chunks[0]["source_text"]
+        self.assertIn(
+            "WALLBOX DUO = 220000 Ft – 290000 Ft", source_text
+        )
+        self.assertIn(
+            "VERTICA DUO = 220000 Ft – 290000 Ft", source_text
+        )
+
     def test_combo_gs_xl_price_row(self):
         row = self._price_row(
             "opel_HU_Combo__Electric_egyteru.pdf",
@@ -170,10 +211,23 @@ class OpelPdfRegressionTests(unittest.TestCase):
         )
         self.assertEqual(len(table["rows"]), 3)
         self.assertEqual(table["rows"][0][1:], ["419900 Ft", "999900 Ft", "1999900 Ft"])
-        self.assertEqual(table["rows"][1], ["TELEPÍTÉS", "299900 Ft", "220000 Ft –", "290000 Ft"])
+        self.assertEqual(
+            table["rows"][1],
+            [
+                "TELEPÍTÉS",
+                "299900 Ft",
+                "220000 Ft – 290000 Ft",
+                "220000 Ft – 290000 Ft",
+            ],
+        )
         self.assertEqual(
             table["rows"][2],
-            ["ÉVES KARBANTARTÁS", "30000 Ft", "60000 Ft /", "120000 Ft*"],
+            [
+                "ÉVES KARBANTARTÁS",
+                "30000 Ft",
+                "60000 Ft / 120000 Ft*",
+                "60000 Ft / 120000 Ft*",
+            ],
         )
 
         page_text = " ".join(

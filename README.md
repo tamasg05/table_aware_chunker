@@ -121,12 +121,21 @@ construction.
    supplied inputs are local PDF paths or HTTP(S) URLs for HTML pages, allowing
    the package to select the appropriate extractor when all inputs have the same
    type.
-3. Reconstruct selected complex PDF table layouts, including missing borders or
-   separator lines, unruled leading columns, rotated headings, side-by-side
-   tables, detector-created empty spacer columns, and visually merged rows
-   containing labeled multi-column text. Values from cells that geometrically
-   span several rows are repeated in every covered logical row, allowing each
-   row to remain understandable on its own.
+3. Reconstruct selected complex PDF table layouts, including:
+
+   - missing borders or separator lines;
+   - unruled leading columns;
+   - rotated headings;
+   - side-by-side tables;
+   - detector-created empty spacer columns;
+   - visually merged rows containing labeled multi-column text;
+   - vertically merged cells, whose values are repeated in every covered
+     logical row; and
+   - horizontally merged cells, whose complete values are copied into every
+     covered logical column.
+
+   Expanding merged values in this way allows each resulting row and column to
+   remain understandable when processed independently.
 4. Process PDF text arranged in two or more side-by-side columns by detecting
    the recurring whitespace gutters between them, reading every column from
    top to bottom in left-to-right order, and joining each column's wrapped
@@ -460,21 +469,7 @@ Beautiful Soup dependencies are distributed under the MIT License.
    must continue to respect structural boundaries: blocks should not be joined
    blindly across pages, tables, sources, or unrelated sections.
 
-2. **Represent cells spanning several columns explicitly.** A value centered
-   across two or more columns usually applies to every column covered by that
-   visual span. A basic rectangular extraction may place the value in the first
-   column and leave the other covered cells empty, making those columns appear
-   unrelated to it, or may incorrectly divide one value at a detected column
-   boundary. For example, a merged cell spanning `WALLBOX DUO` and `VERTICA
-   DUO` should retain the complete value `220000 Ft – 290000 Ft` in both
-   logical cells; similarly, `60000 Ft / 120000 Ft*` should remain complete in
-   both affected cells. The preferred future behavior is to copy the shared
-   value into every affected logical cell. Each row or column group would then
-   retain the value when processed independently. The original `colspan` could
-   also be retained as metadata when the exact source layout needs to be
-   reconstructed.
-
-3. **Support additional chunking strategies.** Currently,
+2. **Support additional chunking strategies.** Currently,
    `strategy="words"` divides ordinary text by word count while preserving table
    rows. Additional strategies could split prose at sentence or paragraph
    boundaries, use the tokenizer of a selected embedding model, or respect
