@@ -17,7 +17,7 @@ from .blocks import (
 )
 
 
-CHUNKS_SCHEMA_VERSION = "1.0"
+CHUNKS_SCHEMA_VERSION = "1.1"
 
 # Keep letters, numbers, and internal apostrophes, but discard punctuation
 # marks around words. Case is preserved so names remain readable.
@@ -202,7 +202,121 @@ def _table_column_groups(block: dict, size: int) -> list[dict]:
     return variants
 
 
-def chunk_structured_blocks(blocks: Sequence[dict], size: int, overlap: int) -> list[dict]:
+def _source_identity(block: dict) -> tuple[str, str]:
+    """Return the fields identifying one source document."""
+    return block.get("source_name", ""), block.get("source_url", "")
+
+
+def _heading_path(block: dict) -> tuple[str, ...]:
+    """Return one normalized heading path for compatibility comparisons."""
+    return tuple(
+        clean_text(item)
+        for item in block.get("heading_path", [])
+        if clean_text(item)
+    )
+
+
+def _heading_introduces_block(heading: dict, following: dict) -> bool:
+    """Return whether a heading can be attached to the following text block."""
+    if heading.get("type") != "heading":
+        return False
+    text = clean_text(heading.get("text", ""))
+    if not text:
+        return False
+    parent = _heading_path(heading)
+    full_path = (*parent, text)
+    following_path = _heading_path(following)
+    if following.get("type") == "heading":
+        return following_path[: len(full_path)] == full_path
+    return following_path == parent or following_path[: len(full_path)] == full_path
+
+
+def _render_text_parts(blocks: Sequence[dict]) -> list[str]:
+    """Render adjacent text blocks without repeating their shared heading path."""
+    return [
+        render_block(block) if index == 0 else clean_text(block.get("text", ""))
+        for index, block in enumerate(blocks)
+    ]
+
+
+def _text_group_word_count(blocks: Sequence[dict]) -> int:
+    """Count the rendered words in a pending text-block group."""
+    return sum(len(tokenize_words(part)) for part in _render_text_parts(blocks))
+
+
+def _compatible_text_block(
+    pending: Sequence[dict],
+    candidate: dict,
+    max_page_span: int,
+) -> bool:
+    """Return whether a text block can safely join the pending text group."""
+    if not pending or _source_identity(pending[-1]) != _source_identity(candidate):
+        return False
+    previous = pending[-1]
+    if candidate.get("type") == "heading":
+        if not _heading_introduces_block(previous, candidate):
+            return False
+    elif _heading_path(previous) != _heading_path(candidate):
+        if not _heading_introduces_block(previous, candidate):
+            return False
+
+    previous_page = previous.get("page")
+    candidate_page = candidate.get("page")
+    if previous_page is None or candidate_page is None:
+        return previous_page is candidate_page
+    if candidate_page < previous_page or candidate_page > previous_page + 1:
+        return False
+    pages = [
+        block.get("page")
+        for block in [*pending, candidate]
+        if isinstance(block.get("page"), int)
+    ]
+    return max(pages) - min(pages) + 1 <= max_page_span
+
+
+def _text_chunk_metadata(
+    blocks: Sequence[dict],
+    word_counts: Sequence[int],
+    token_start: int,
+    token_end: int,
+) -> dict:
+    """Copy source metadata and record the pages contributing to one chunk."""
+    included: list[dict] = []
+    cursor = 0
+    for block, count in zip(blocks, word_counts):
+        block_end = cursor + count
+        if count and block_end > token_start and cursor < token_end:
+            included.append(block)
+        cursor = block_end
+    contributing = included or list(blocks[:1])
+    metadata = _copy_metadata(contributing[0]) if contributing else {}
+    pages = sorted(
+        {
+            block["page"]
+            for block in contributing
+            if isinstance(block.get("page"), int)
+        }
+    )
+    if pages:
+        metadata["page"] = pages[0]
+    if len(pages) > 1:
+        metadata.update(
+            {
+                "page_start": pages[0],
+                "page_end": pages[-1],
+                "pages": pages,
+            }
+        )
+    return metadata
+
+
+def chunk_structured_blocks(
+    blocks: Sequence[dict],
+    size: int,
+    overlap: int,
+    min_text_size: int = 100,
+    max_text_page_span: int = 2,
+) -> list[dict]:
     """
     Chunk text by section and tables by complete rows.
 
@@ -210,15 +324,24 @@ def chunk_structured_blocks(blocks: Sequence[dict], size: int, overlap: int) -> 
         blocks: Ordered common-representation blocks.
         size: Target maximum word-token count per chunk.
         overlap: Word overlap for ordinary text chunks; tables do not split rows.
+        min_text_size: Best-effort minimum word target used when deciding
+            whether compatible text can continue onto the next page. Zero
+            preserves page-local text grouping.
+        max_text_page_span: Maximum number of consecutive pages represented by
+            one merged text group.
 
     Returns:
         Chunk dictionaries compatible with all three existing RAG indexes.
     """
     if size <= 0 or overlap < 0 or overlap >= size:
         raise ValueError("Require size > 0 and 0 <= overlap < size")
+    if min_text_size < 0:
+        raise ValueError("min_text_size must be zero or greater")
+    if max_text_page_span <= 0:
+        raise ValueError("max_text_page_span must be greater than zero")
+    effective_min_text_size = min(size, min_text_size)
     chunks: list[dict] = []
     pending: list[dict] = []
-    pending_key: tuple | None = None
 
     def append_chunk(text: str, source_text: str, metadata: dict) -> None:
         """
@@ -253,10 +376,20 @@ def chunk_structured_blocks(blocks: Sequence[dict], size: int, overlap: int) -> 
         nonlocal pending
         if not pending:
             return
-        source_text = "\n\n".join(render_block(block) for block in pending)
-        metadata = _copy_metadata(pending[0])
-        metadata["block_type"] = "text"
+        parts = _render_text_parts(pending)
+        source_text = "\n\n".join(part for part in parts if part)
+        word_counts = [len(tokenize_words(part)) for part in parts]
+        step = size - overlap
         for local in chunk_words(source_text, size, overlap):
+            token_start = local["id"] * step
+            token_end = token_start + len(tokenize_words(local["source_text"]))
+            metadata = _text_chunk_metadata(
+                pending,
+                word_counts,
+                token_start,
+                token_end,
+            )
+            metadata["block_type"] = "text"
             append_chunk(local["text"], local["source_text"], metadata)
         pending = []
 
@@ -323,7 +456,6 @@ def chunk_structured_blocks(blocks: Sequence[dict], size: int, overlap: int) -> 
         if block.get("type") == "table":
             if not block.get("rows"):
                 flush_text()
-                pending_key = None
                 continue
             while pending and _table_retains_introductory_block(
                 pending[-1], block
@@ -332,18 +464,20 @@ def chunk_structured_blocks(blocks: Sequence[dict], size: int, overlap: int) -> 
             flush_text()
             for table_group in _table_column_groups(block, size):
                 append_table_rows(table_group)
-            pending_key = None
             continue
 
-        key = (
-            block.get("source_name", ""),
-            block.get("source_url", ""),
-            block.get("page"),
-            tuple(block.get("heading_path", [])),
-        )
-        if pending and key != pending_key:
-            flush_text()
-        pending_key = key
+        if pending:
+            crosses_page = pending[-1].get("page") != block.get("page")
+            target_reached = (
+                effective_min_text_size == 0
+                or _text_group_word_count(pending) >= effective_min_text_size
+            )
+            if not _compatible_text_block(
+                pending,
+                block,
+                max_text_page_span,
+            ) or (crosses_page and target_reached):
+                flush_text()
         pending.append(block)
     flush_text()
     return chunks
@@ -356,6 +490,8 @@ def build_chunks(
     strategy: str = "words",
     chunk_size: int = 450,
     chunk_overlap: int = 60,
+    min_text_chunk_size: int = 100,
+    max_text_page_span: int = 2,
 ) -> list[dict]:
     """
     Build and optionally persist chunks from extracted blocks.
@@ -367,6 +503,12 @@ def build_chunks(
         chunk_size: Target maximum word count for one chunk.
         chunk_overlap: Repeated words between ordinary text chunks. Complete
             table rows are never overlapped or split.
+        min_text_chunk_size: Best-effort minimum word target for merging
+            compatible short text across consecutive pages. Values larger than
+            ``chunk_size`` are capped at that maximum; zero disables cross-page
+            merging.
+        max_text_page_span: Maximum consecutive-page span for one merged text
+            group.
 
     Returns:
         Structure-aware chunk dictionaries in retrieval order.
@@ -380,7 +522,13 @@ def build_chunks(
     else:
         source_blocks = validate_blocks(list(blocks))
 
-    chunks = chunk_structured_blocks(source_blocks, chunk_size, chunk_overlap)
+    chunks = chunk_structured_blocks(
+        source_blocks,
+        chunk_size,
+        chunk_overlap,
+        min_text_chunk_size,
+        max_text_page_span,
+    )
     if not chunks:
         raise ValueError("The extracted blocks did not produce any chunks.")
     if output_path is not None:

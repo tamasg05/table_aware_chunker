@@ -25,6 +25,21 @@ def main() -> None:
         default=Path("example_output"),
         help="Directory for generated corpus files (default: example_output)",
     )
+    parser.add_argument(
+        "--min-text-chunk-size",
+        type=int,
+        default=100,
+        help=(
+            "Best-effort minimum word target for compatible text chunks "
+            "(default: 100; use 0 to keep text page-local)"
+        ),
+    )
+    parser.add_argument(
+        "--max-text-page-span",
+        type=int,
+        default=2,
+        help="Maximum consecutive-page span for merged text (default: 2)",
+    )
     args = parser.parse_args()
 
     corpus = extract_corpus(
@@ -38,6 +53,8 @@ def main() -> None:
         strategy="words",
         chunk_size=450,
         chunk_overlap=60,
+        min_text_chunk_size=args.min_text_chunk_size,
+        max_text_page_span=args.max_text_page_span,
     )
 
     print(f"Extracted corpus: {corpus.corpus_path}")

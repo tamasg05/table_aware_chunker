@@ -160,18 +160,36 @@ construction.
 11. Create overlapping word-based chunks for ordinary text while keeping
     complete table rows together whenever they fit within the configured chunk
     size.
-12. Split exceptionally wide table rows into column groups while repeating their
+12. Consolidate compatible short text blocks toward a configurable
+    `min_text_chunk_size` target, which is 100 words by default. Headings are
+    attached to the content they introduce, and page-local text may be joined
+    to text on the next consecutive page only when it belongs to the same
+    source and section, no table intervenes, and the group remains within the
+    configurable `max_text_page_span` limit of two pages by default. The
+    minimum is a best-effort target: structural boundaries take precedence, and
+    `chunk_size` remains the maximum size of each resulting word chunk.
+
+    For example:
+
+    - A heading and short paragraph on page 4 followed by a compatible paragraph
+      on page 5 can become one text chunk. A following table remains a separate
+      table chunk.
+    - Text on page 4 followed by a table and then text on page 5 produces three
+      chunks in that order: text, table, text. Text is never merged through the
+      table.
+
+13. Split exceptionally wide table rows into column groups while repeating their
     leading key cells, so each group remains interpretable.
-13. Provide both normalized `text` and structure-preserving `source_text`. For
+14. Provide both normalized `text` and structure-preserving `source_text`. For
     table cells, `source_text` contains explicit `column = value` relationships,
     while `text` retains the column names and values without the equal signs or
     surrounding punctuation. When a particular row has an empty cell, that
     column is omitted from the row's serialized representations instead of
     producing an empty `column = value` assignment.
-14. Expose extraction and chunking through an optional stateless REST service,
+15. Expose extraction and chunking through an optional stateless REST service,
     allowing applications without a Python runtime to use the library over
     HTTP.
-15. Perform extraction and chunking without AI models or model API calls.
+16. Perform extraction and chunking without AI models or model API calls.
 
 ## Installation
 
@@ -225,6 +243,8 @@ chunks = build_chunks(
     strategy="words",
     chunk_size=450,
     chunk_overlap=60,
+    min_text_chunk_size=100,
+    max_text_page_span=2,
 )
 ```
 
@@ -379,11 +399,22 @@ and would require a browser-rendering stage before extraction.
 `chunk_size=450` is a maximum target, not a required or minimum length. The
 chunker does not add content merely to make every chunk equally long.
 
-For ordinary text, consecutive blocks can be combined only while they belong
-to the same source, page, and heading path and are not interrupted by a table.
-The combined text is then divided into overlapping word ranges of at most the
-configured size. If only a short paragraph or heading is available before a
-structural boundary, the resulting chunk is correspondingly short.
+For ordinary text, `min_text_chunk_size=100` is a best-effort minimum target.
+Consecutive blocks on the same page are grouped while they belong to the same
+source and compatible heading context. When that page-local group is still
+shorter than the target, compatible text from the next consecutive page may be
+added. The group may cover at most `max_text_page_span=2` pages by default, and
+a table, source change, unrelated section, skipped page, or page-span limit
+always ends it. A heading can attach only to content that follows it. Setting
+`min_text_chunk_size=0` disables merging across pages.
+
+The combined text is divided into overlapping word ranges of no more than
+`chunk_size`. Therefore, the minimum target never overrides the maximum chunk
+size, and it cannot force unrelated content to be joined. If a structural
+boundary is reached before the minimum, the resulting chunk remains short.
+For a chunk containing text from several pages, `page` identifies the first
+contributing page and the additional `page_start`, `page_end`, and `pages`
+fields preserve the complete page provenance.
 
 Tables are processed separately. Complete rows are packed into a chunk until
 adding another row would exceed the target size. Rows are not split merely to
@@ -464,12 +495,7 @@ Beautiful Soup dependencies are distributed under the MIT License.
 
 ## Future Work
 
-1. **Support a configurable minimum text-chunk target.** Compatible short text
-   blocks could be merged to reduce retrieval and indexing overhead. Merging
-   must continue to respect structural boundaries: blocks should not be joined
-   blindly across pages, tables, sources, or unrelated sections.
-
-2. **Support additional chunking strategies.** Currently,
+1. **Support additional chunking strategies.** Currently,
    `strategy="words"` divides ordinary text by word count while preserving table
    rows. Additional strategies could split prose at sentence or paragraph
    boundaries, use the tokenizer of a selected embedding model, or respect

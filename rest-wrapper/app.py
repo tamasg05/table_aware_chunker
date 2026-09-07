@@ -80,6 +80,8 @@ class ChunkRequest(BaseModel):
     strategy: str = "words"
     chunk_size: int = Field(default=450, gt=0)
     chunk_overlap: int = Field(default=60, ge=0)
+    min_text_chunk_size: int = Field(default=100, ge=0)
+    max_text_page_span: int = Field(default=2, gt=0)
 
 
 class ChunkResponse(BaseModel):
@@ -241,6 +243,8 @@ async def chunks_endpoint(request: ChunkRequest) -> ChunkResponse:
                 strategy=request.strategy,
                 chunk_size=request.chunk_size,
                 chunk_overlap=request.chunk_overlap,
+                min_text_chunk_size=request.min_text_chunk_size,
+                max_text_page_span=request.max_text_page_span,
             )
         )
     except ValueError as exc:

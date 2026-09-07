@@ -49,9 +49,18 @@ identifiers. Send its `blocks` to the second endpoint:
   ],
   "strategy": "words",
   "chunk_size": 450,
-  "chunk_overlap": 60
+  "chunk_overlap": 60,
+  "min_text_chunk_size": 100,
+  "max_text_page_span": 2
 }
 ```
+
+`min_text_chunk_size` is a best-effort word target for consolidating compatible
+short text. If a page-local text group is shorter than this target, it may be
+joined to text on the next page when both groups belong to the same source and
+section. `max_text_page_span` limits how many consecutive pages one such group
+may cover. Tables always end the text group, and setting
+`min_text_chunk_size` to `0` disables cross-page text merging.
 
 ```bash
 curl -X POST http://localhost:8000/v1/chunks \

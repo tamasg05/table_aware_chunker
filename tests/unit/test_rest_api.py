@@ -96,6 +96,42 @@ class RestApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertIn("smaller than", response.json()["detail"])
 
+    def test_chunks_endpoint_exposes_short_text_consolidation_options(self):
+        blocks = [
+            {
+                "type": "paragraph",
+                "text": "short text on page one",
+                "source_name": "sample.pdf",
+                "source_url": "",
+                "page": 1,
+                "heading_path": [],
+            },
+            {
+                "type": "paragraph",
+                "text": "related text on page two",
+                "source_name": "sample.pdf",
+                "source_url": "",
+                "page": 2,
+                "heading_path": [],
+            },
+        ]
+        response = self.request(
+            "POST",
+            "/v1/chunks",
+            json={
+                "blocks": blocks,
+                "chunk_size": 30,
+                "chunk_overlap": 0,
+                "min_text_chunk_size": 20,
+                "max_text_page_span": 2,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["chunks"][0]["pages"], [1, 2])
+
     def test_extract_endpoint_returns_portable_artifacts(self):
         block = {
             "type": "paragraph",
