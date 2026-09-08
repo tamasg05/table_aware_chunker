@@ -11,6 +11,7 @@ from unittest.mock import patch
 from table_aware_chunker.pdf_extractor import (
     _clean_pdf_table,
     _group_pdf_text_lines,
+    _image_card_sections,
     _positioned_words_text,
     _reconstruct_pdf_table,
     _split_physical_table_row,
@@ -33,6 +34,56 @@ def word(text, x0, top, x1, bottom):
 
 
 class PdfExtractorTests(unittest.TestCase):
+    def test_image_backed_cards_become_independent_label_value_rows(self):
+        words = [
+            word("Available", 90, 5, 135, 12),
+            word("accessories", 138, 5, 205, 12),
+            word("Alpha", 35, 75, 65, 82),
+            word("kit", 68, 75, 82, 82),
+            word("10", 45, 88, 56, 95),
+            word("000", 59, 88, 76, 95),
+            word("Ft", 79, 88, 89, 95),
+            word("Beta", 195, 75, 225, 82),
+            word("rack", 228, 75, 252, 82),
+            word("20", 205, 88, 216, 95),
+            word("000", 219, 88, 236, 95),
+            word("Ft", 239, 88, 249, 95),
+            word("Legal", 5, 120, 30, 127),
+            word("note", 33, 120, 55, 127),
+        ]
+        images = [
+            {"x0": 20, "top": 30, "x1": 100, "bottom": 70},
+            {"x0": 180, "top": 30, "x1": 260, "bottom": 70},
+        ]
+        rectangles = [
+            {"x0": 0, "top": 20, "x1": 300, "bottom": 21.5},
+        ]
+
+        sections = _image_card_sections(words, images, rectangles, 300)
+
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0]["caption"], "Available accessories")
+        self.assertEqual(
+            sections[0]["rows"],
+            [["Alpha kit", "10000 Ft"], ["Beta rack", "20000 Ft"]],
+        )
+        consumed_text = {key[0] for key in sections[0]["consumed_words"]}
+        self.assertNotIn("Legal", consumed_text)
+
+    def test_single_captioned_image_is_not_treated_as_a_card_grid(self):
+        sections = _image_card_sections(
+            [
+                word("Overview", 20, 5, 65, 12),
+                word("Capacity", 20, 75, 65, 82),
+                word("100", 20, 88, 40, 95),
+            ],
+            [{"x0": 10, "top": 30, "x1": 90, "bottom": 70}],
+            [{"x0": 0, "top": 20, "x1": 120, "bottom": 21.5}],
+            300,
+        )
+
+        self.assertEqual(sections, [])
+
     def test_reconstruction_removes_empty_internal_spacer_columns(self):
         boundaries = (0, 20, 24, 44, 48, 68, 72, 92)
         table = SimpleNamespace(

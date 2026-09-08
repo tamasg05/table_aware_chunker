@@ -20,7 +20,7 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v13-pdf-cell-spans"
+PDF_CORPUS_VERSION = "v14-image-card-sections"
 
 _GROUPED_NUMBER = re.compile(r"(?<!\w)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\w)")
 
@@ -692,6 +692,218 @@ def _horizontal_word_groups(
         else:
             groups[-1].append(word)
     return groups
+
+
+def _boxes_overlap(first: Sequence[float], second: Sequence[float]) -> bool:
+    """Return whether two PDF boxes have a positive-area intersection."""
+    return (
+        min(float(first[2]), float(second[2]))
+        > max(float(first[0]), float(second[0]))
+        and min(float(first[3]), float(second[3]))
+        > max(float(first[1]), float(second[1]))
+    )
+
+
+def _looks_like_card_value(text: str) -> bool:
+    """Identify a compact numeric value printed below an image-card label."""
+    value = clean_text(text)
+    return (
+        bool(value)
+        and len(value.split()) <= 6
+        and any(character.isdigit() for character in value)
+        and (value[0].isdigit() or value[0] in "$£¥€")
+    )
+
+
+def _image_card_sections(
+    words: Sequence[dict],
+    images: Sequence[dict],
+    rectangles: Sequence[dict],
+    page_width: float,
+) -> list[dict]:
+    """
+    Reconstruct underlined sections containing repeated image-backed cards.
+
+    Brochures sometimes arrange product photographs in rows and print a label
+    and numeric value beneath each one. Decorative clipping rectangles around
+    the text can be mistaken for table cells. This layout-only reconstruction
+    uses the section underline, image centers, and text baselines to retain one
+    independent ``Label``/``Value`` row per card.
+    """
+    upright_words = [word for word in words if word.get("upright", True)]
+    minimum_rule_width = max(80.0, page_width * 0.2)
+    rules: list[tuple[float, float, float, float]] = []
+    for rectangle in rectangles:
+        try:
+            box = tuple(
+                float(rectangle[key]) for key in ("x0", "top", "x1", "bottom")
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        width = box[2] - box[0]
+        height = box[3] - box[1]
+        if width >= minimum_rule_width and 0.0 < height <= 3.0:
+            rules.append(box)
+
+    image_boxes: list[tuple[float, float, float, float]] = []
+    for image in images:
+        try:
+            box = tuple(float(image[key]) for key in ("x0", "top", "x1", "bottom"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if box[2] - box[0] < 30.0 or box[3] - box[1] < 25.0:
+            continue
+        if any(
+            all(abs(value - existing[index]) <= 1.0 for index, value in enumerate(box))
+            for existing in image_boxes
+        ):
+            continue
+        image_boxes.append(box)
+
+    sections: list[dict] = []
+    for rule_left, rule_top, rule_right, rule_bottom in sorted(
+        rules, key=lambda box: (box[1], box[0])
+    ):
+        heading_candidates = [
+            word
+            for word in upright_words
+            if rule_top - 25.0 <= float(word["top"])
+            and float(word["bottom"]) <= rule_top + 1.0
+            and rule_left <= _word_center(word)[0] <= rule_right
+        ]
+        heading_words = _nearest_upright_header_words(heading_candidates)
+        heading = _positioned_words_text(heading_words)
+        if (
+            not heading
+            or len(heading.split()) > 12
+            or not any(character.isalpha() for character in heading)
+        ):
+            continue
+
+        next_rule_top = min(
+            (
+                other_top
+                for _, other_top, _, _ in rules
+                if other_top > rule_top + 3.0
+            ),
+            default=float("inf"),
+        )
+        section_images = [
+            box
+            for box in image_boxes
+            if rule_bottom - 1.0 <= box[1] < next_rule_top
+            and rule_left - 2.0 <= (box[0] + box[2]) / 2 <= rule_right + 2.0
+        ]
+        if len(section_images) < 2:
+            continue
+
+        image_rows: list[list[tuple[float, float, float, float]]] = []
+        for image_box in sorted(section_images, key=lambda box: (box[1], box[0])):
+            if image_rows:
+                row_top = statistics.median(box[1] for box in image_rows[-1])
+                if abs(image_box[1] - row_top) <= 12.0:
+                    image_rows[-1].append(image_box)
+                    continue
+            image_rows.append([image_box])
+
+        cards: list[tuple[int, float, str, str, list[dict]]] = []
+        for row_index, image_row in enumerate(image_rows):
+            ordered_images = sorted(
+                image_row, key=lambda box: (box[0] + box[2]) / 2
+            )
+            centers = [(box[0] + box[2]) / 2 for box in ordered_images]
+            dividers = [
+                (left_center + right_center) / 2
+                for left_center, right_center in zip(centers, centers[1:])
+            ]
+            horizontal_bounds = [rule_left, *dividers, rule_right]
+            next_image_top = (
+                min(box[1] for box in image_rows[row_index + 1])
+                if row_index + 1 < len(image_rows)
+                else next_rule_top
+            )
+
+            for image_index, image_box in enumerate(ordered_images):
+                image_bottom = image_box[3]
+                text_bottom = min(image_bottom + 50.0, next_image_top - 1.0)
+                selected = [
+                    word
+                    for word in upright_words
+                    if image_bottom - 1.0 <= _word_center(word)[1] <= text_bottom
+                    and horizontal_bounds[image_index]
+                    <= _word_center(word)[0]
+                    <= horizontal_bounds[image_index + 1]
+                ]
+                line_groups = _positioned_line_groups(selected)
+                value_index = next(
+                    (
+                        index
+                        for index in range(len(line_groups) - 1, 0, -1)
+                        if _looks_like_card_value(
+                            _positioned_words_text(line_groups[index])
+                        )
+                    ),
+                    None,
+                )
+                if value_index is None:
+                    continue
+                label_lines = line_groups[:value_index]
+                label_words = [word for line in label_lines for word in line]
+                value_words = line_groups[value_index]
+                if not label_words:
+                    continue
+                value_top = min(float(word["top"]) for word in value_words)
+                label_bottom = max(float(word["bottom"]) for word in label_words)
+                if value_top - label_bottom > 25.0:
+                    continue
+                label = _join_wrapped_pdf_lines(
+                    [_positioned_words_text(line) for line in label_lines]
+                )
+                value = _positioned_words_text(value_words)
+                if not label or not value:
+                    continue
+                selected_words = [*label_words, *value_words]
+                cards.append(
+                    (
+                        row_index,
+                        centers[image_index],
+                        label,
+                        value,
+                        selected_words,
+                    )
+                )
+
+        if len(cards) < 2 or len(cards) * 2 < len(section_images):
+            continue
+        cards.sort(key=lambda card: (card[0], card[1]))
+        card_words = [word for card in cards for word in card[4]]
+        content_bottom = max(float(word["bottom"]) for word in card_words)
+        heading_top = min(float(word["top"]) for word in heading_words)
+        consumed_words = {
+            _word_key(word) for word in [*heading_words, *card_words]
+        }
+        sections.append(
+            {
+                "top": heading_top,
+                "caption": heading,
+                "rows": [[card[2], card[3]] for card in cards],
+                "bbox": (rule_left, heading_top, rule_right, content_bottom),
+                "suppression_bbox": (
+                    rule_left,
+                    heading_top,
+                    rule_right,
+                    content_bottom + 20.0,
+                ),
+                "consumed_words": consumed_words,
+            }
+        )
+    return sorted(
+        sections,
+        key=lambda section: (
+            round(float(section["top"])),
+            float(section["bbox"][0]),
+        ),
+    )
 
 
 def _reconstruct_label_value_grid(
@@ -1414,8 +1626,25 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                 # Some unusual PDF drawing instructions defeat table detection;
                 # retain the page text instead of failing the complete corpus.
                 found_tables = []
-            boxes = [tuple(table.bbox) for table in found_tables]
             words = content_page.extract_words(**_PDF_WORD_OPTIONS) or []
+            card_sections = _image_card_sections(
+                words,
+                getattr(content_page, "images", []) or [],
+                getattr(content_page, "rects", []) or [],
+                float(content_page.width),
+            )
+            suppression_boxes = [
+                section["suppression_bbox"] for section in card_sections
+            ]
+            numbered_tables = [
+                (table_number, table)
+                for table_number, table in enumerate(found_tables, start=1)
+                if not any(
+                    _boxes_overlap(table.bbox, suppression_box)
+                    for suppression_box in suppression_boxes
+                )
+            ]
+            boxes = [tuple(table.bbox) for _, table in numbered_tables]
             table_details: list[
                 tuple[
                     int,
@@ -1426,8 +1655,12 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                     dict[str, object],
                 ]
             ] = []
-            consumed_table_words: set[tuple] = set()
-            for table_number, table in enumerate(found_tables, start=1):
+            consumed_table_words: set[tuple] = {
+                word_key
+                for section in card_sections
+                for word_key in section["consumed_words"]
+            }
+            for table_number, table in numbered_tables:
                 reconstruction_info: dict[str, object] = {}
                 try:
                     headers, rows, section_rows, used_header_words = (
@@ -1469,6 +1702,23 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                 and _word_key(word) not in consumed_table_words
             ]
             positioned: list[tuple[float, dict]] = []
+            for card_number, section in enumerate(card_sections, start=1):
+                block = make_table_block(
+                    ["Label", "Value"],
+                    section["rows"],
+                    path.name,
+                    table_id=(
+                        f"{path.name}-page-{page_number}-card-table-{card_number}"
+                    ),
+                    caption=section["caption"],
+                    page=page_number,
+                )
+                block["bbox"] = [
+                    round(float(value), 2) for value in section["bbox"]
+                ]
+                positioned.append(
+                    (round(float(section["top"])) + card_number * 0.001, block)
+                )
             lines = _group_pdf_text_lines(outside_words)
             for top, text in lines:
                 if text:

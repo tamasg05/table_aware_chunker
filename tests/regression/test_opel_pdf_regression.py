@@ -155,6 +155,91 @@ class OpelPdfRegressionTests(unittest.TestCase):
             "VERTICA DUO = 220000 Ft – 290000 Ft", source_text
         )
 
+    def test_astra_accessory_cards_keep_labels_prices_and_sections(self):
+        page_blocks = [
+            block
+            for block in self.blocks_by_file["opel_HU_Astra_Electric.pdf"]
+            if block.get("page") == 8
+        ]
+        card_tables = [
+            block
+            for block in page_blocks
+            if "-card-table-" in block.get("table_id", "")
+        ]
+
+        self.assertEqual(
+            [table["caption"] for table in card_tables],
+            [
+                "Gyári tartozékok",
+                "Opel Flexconnect rendszer",
+                "THULE tartozékok",
+                "Töltőkábel",
+            ],
+        )
+        self.assertTrue(
+            all(table["headers"] == ["Label", "Value"] for table in card_tables)
+        )
+        self.assertEqual(
+            card_tables[0]["rows"],
+            [
+                ["Első öntött sárfogó készlet", "45000 Ft"],
+                ["Gumiszőnyeg garnitúra", "42000 Ft"],
+                ["Hátsó és hátsó oldalsó árnyékoló szett", "79000 Ft"],
+                ["Merev csomagtértálca, 2 oldalas vízálló / szőnyeg", "44000 Ft"],
+                ["Rozsdamentes acél pedálborítás: 2 pedál (automata)", "19000 Ft"],
+                ["Keresztirányú alumínium tetőrudak", "190000 Ft"],
+            ],
+        )
+        self.assertEqual(
+            card_tables[1]["rows"],
+            [
+                ["FlexConnect moduláris csatlakozó és vállfa", "62500 Ft"],
+                ["2 pohártartós asztalka 2 moduláris csatlakozó", "139000 Ft"],
+                [
+                    "1 asztalka + 1 univerzális tablet tartó + 2 csatlakozó",
+                    "144000 Ft",
+                ],
+                [
+                    "2 univerzális tablet tartó 2 moduláris csatlakozó",
+                    "149000 Ft",
+                ],
+            ],
+        )
+        self.assertEqual(
+            card_tables[2]["rows"],
+            [
+                ["Freeride 532 1-db-os kerékpártartó", "59500 Ft"],
+                ["Expert 298 1-db-os kerékpártartó", "105000 Ft"],
+                [
+                    "Snowpack 7324 tartó: 4 db síléc / 2 db snowboard",
+                    "101000 Ft",
+                ],
+            ],
+        )
+        self.assertEqual(
+            card_tables[3]["rows"],
+            [
+                ["7,4 kW, 1 fázisú Type 2 kábel", "149000 Ft"],
+                ["22 kW, 3 fázisú Type 2 kábel", "197000 Ft"],
+            ],
+        )
+
+        legal_note = next(
+            block["text"]
+            for block in page_blocks
+            if block.get("type") == "paragraph"
+            and block.get("text", "").startswith("A feltüntetett tartozék")
+        )
+        self.assertIn("nem minősülnek ajánlattételnek", legal_note)
+        self.assertIn("2 év BringIt garancia", legal_note)
+        serialized_tables = " ".join(
+            cell
+            for table in card_tables
+            for row in table["rows"]
+            for cell in row
+        )
+        self.assertNotIn("A feltüntetett tartozék", serialized_tables)
+
     def test_combo_gs_xl_price_row(self):
         row = self._price_row(
             "opel_HU_Combo__Electric_egyteru.pdf",

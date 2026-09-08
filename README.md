@@ -129,6 +129,8 @@ construction.
    - side-by-side tables;
    - detector-created empty spacer columns;
    - visually merged rows containing labeled multi-column text;
+   - image-backed product-card sections, whose repeated labels and numeric
+     values are retained as independent `Label`/`Value` rows;
    - vertically merged cells, whose values are repeated in every covered
      logical row; and
    - horizontally merged cells, whose complete values are copied into every
@@ -325,6 +327,8 @@ library. It opens each document, iterates over its pages, and supplies:
 - words and their page coordinates;
 - information about upright and rotated text;
 - detected table boundaries, rows, columns, cells, and ruling lines;
+- embedded-image positions, which can identify repeated visual cards without
+  interpreting the images' contents;
 - page dimensions and other page-level information, which allow coordinates to
   be interpreted relative to the page and help distinguish separate layout
   regions; and
