@@ -5,6 +5,7 @@ service:
 
 - `POST /v1/extract` accepts PDF uploads or, when explicitly enabled, HTML URLs;
 - `POST /v1/chunks` accepts the returned `blocks` and creates chunks; and
+- `GET /status` reports service availability and build-time Git information;
 - `GET /health` supports container and Kubernetes health probes.
 
 No Python runtime is required in a consuming application pod. Only the REST
@@ -77,6 +78,52 @@ docker build -f rest-wrapper/Dockerfile -t table-aware-chunker-rest:0.1.0 .
 docker run --rm -p 8000:8000 table-aware-chunker-rest:0.1.0
 ```
 
+The simple build remains useful for local testing. Because no Git information
+is supplied, its `/status` response contains `"unknown"` for the commit fields.
+For a traceable image, pass the checked-out commit and its timestamp from Git
+as build arguments:
+
+```bash
+docker build \
+  --build-arg GIT_COMMIT="$(git rev-parse HEAD)" \
+  --build-arg GIT_COMMIT_TIME="$(git show -s --format=%cI HEAD)" \
+  -f rest-wrapper/Dockerfile \
+  -t table-aware-chunker-rest:0.1.0 .
+```
+
+The image converts the commit ID to seven lowercase characters, normalizes the
+commit time to UTC, and stores both values in `/app/rest-wrapper/build-info.json`.
+It also records the full commit ID in the standard
+`org.opencontainers.image.revision` image label. The `.git` directory is not
+copied into the image and Git is not needed when the container runs.
+
+After starting the container, inspect its version with:
+
+```bash
+curl http://localhost:8000/status
+```
+
+The response has the same operational shape as the other services:
+
+```json
+{
+  "git": {
+    "commit": {
+      "id": {
+        "abbrev": "50a44a3"
+      },
+      "time": "2026-09-04T10:46:37Z"
+    }
+  },
+  "status": "UP"
+}
+```
+
+`/status` returns `UP` only when the running application can answer the request.
+The Git values describe the immutable image build. Production images should be
+built by CI from a clean checkout; otherwise the reported commit does not
+identify uncommitted working-tree changes included in the image.
+
 The Dockerfile explicitly installs `rest-wrapper/requirements.txt` and then
 installs the local `table-aware-chunker` project without resolving the same
 dependencies a second time.
@@ -99,7 +146,8 @@ kubectl apply -f rest-wrapper/kubernetes.yaml
 
 Other pods in the same namespace can call
 `http://table-aware-chunker:8000/v1/extract` and
-`http://table-aware-chunker:8000/v1/chunks`.
+`http://table-aware-chunker:8000/v1/chunks`. Build information is available at
+`http://table-aware-chunker:8000/status`.
 
 ## Configuration and security
 

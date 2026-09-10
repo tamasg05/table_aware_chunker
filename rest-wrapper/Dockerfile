@@ -13,7 +13,17 @@ RUN python -m pip install --no-cache-dir -r rest-wrapper/requirements.txt \
     && python -m pip install --no-cache-dir . \
     && useradd --create-home --uid 10001 appuser
 
-COPY rest-wrapper/app.py ./rest-wrapper/app.py
+COPY rest-wrapper/app.py rest-wrapper/generate_build_info.py ./rest-wrapper/
+
+ARG GIT_COMMIT=unknown
+ARG GIT_COMMIT_TIME=unknown
+
+RUN python rest-wrapper/generate_build_info.py \
+        --commit "$GIT_COMMIT" \
+        --commit-time "$GIT_COMMIT_TIME" \
+        --output rest-wrapper/build-info.json
+
+LABEL org.opencontainers.image.revision="$GIT_COMMIT"
 
 WORKDIR /app/rest-wrapper
 

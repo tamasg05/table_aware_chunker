@@ -190,7 +190,8 @@ construction.
     producing an empty `column = value` assignment.
 15. Expose extraction and chunking through an optional stateless REST service,
     allowing applications without a Python runtime to use the library over
-    HTTP.
+    HTTP. Its `/status` endpoint reports availability together with the Git
+    commit and commit time captured when the Docker image was built.
 16. Perform extraction and chunking without AI models or model API calls.
 
 ## Installation
@@ -313,11 +314,13 @@ data stored on the REST service's file system is required.
 For a simple environment, the supplied Dockerfile can run `app.py` in one
 container and expose it on a host port. Kubernetes is optional; the supplied
 manifest adds cluster service discovery, probes, resource controls, and
-deployment management when those capabilities are useful. Installation,
-endpoint, Docker, Kubernetes, configuration, and security instructions are
-documented in the [`rest-wrapper/README.md`](rest-wrapper/README.md) file. The
-REST service must be started as described in that file before a client
-application can call its endpoints.
+deployment management when those capabilities are useful. The wrapper also
+provides `/status`, which identifies the Git commit used to build a traceable
+Docker image. Installation, endpoint, build-metadata, Docker, Kubernetes,
+configuration, and security instructions are documented in the
+[`rest-wrapper/README.md`](rest-wrapper/README.md) file. The REST service must
+be started as described in that file before a client application can call its
+endpoints.
 
 ## How `pdfplumber` is used
 

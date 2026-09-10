@@ -44,6 +44,16 @@ class RestApiTests(unittest.TestCase):
         cls.rest_module = module
         cls.app = module.app
 
+        generator_path = module_path.with_name("generate_build_info.py")
+        generator_specification = importlib.util.spec_from_file_location(
+            "table_aware_chunker_build_info", generator_path
+        )
+        if generator_specification is None or generator_specification.loader is None:
+            raise RuntimeError(f"Cannot load build-info generator: {generator_path}")
+        generator = importlib.util.module_from_spec(generator_specification)
+        generator_specification.loader.exec_module(generator)
+        cls.build_info_generator = generator
+
     def request(self, method: str, path: str, **options):
         async def send():
             async with self.client_class(
@@ -59,6 +69,56 @@ class RestApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_status_returns_build_git_information(self):
+        build_info = {
+            "git": {
+                "commit": {
+                    "id": {"abbrev": "50a44a3"},
+                    "time": "2026-09-04T10:46:37Z",
+                }
+            }
+        }
+
+        with patch.object(self.rest_module, "BUILD_INFO", build_info):
+            response = self.request("GET", "/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                **build_info,
+                "status": "UP",
+            },
+        )
+
+    def test_build_info_generator_abbreviates_and_normalizes_git_values(self):
+        build_info = self.build_info_generator.create_build_info(
+            "50A44A31234567890ABCDEF1234567890ABCDEF1",
+            "2026-09-04T12:46:37+02:00",
+        )
+
+        self.assertEqual(
+            build_info,
+            {
+                "git": {
+                    "commit": {
+                        "id": {"abbrev": "50a44a3"},
+                        "time": "2026-09-04T10:46:37Z",
+                    }
+                }
+            },
+        )
+
+    def test_build_info_generator_rejects_invalid_git_values(self):
+        with self.assertRaisesRegex(ValueError, "hexadecimal"):
+            self.build_info_generator.create_build_info(
+                "not-a-commit", "2026-09-04T10:46:37Z"
+            )
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            self.build_info_generator.create_build_info(
+                "50a44a3", "2026-09-04T10:46:37"
+            )
 
     def test_chunks_endpoint(self):
         response = self.request(

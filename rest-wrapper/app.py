@@ -61,6 +61,41 @@ URL_TIMEOUT_SECONDS = _positive_environment_float("TAC_URL_TIMEOUT_SECONDS", 20.
 ALLOW_URL_SOURCES = _environment_flag("TAC_ALLOW_URL_SOURCES", False)
 
 
+def _load_build_info(path: Path) -> dict[str, Any]:
+    """Load validated build metadata, with an explicit local-development fallback."""
+    if not path.is_file():
+        return {
+            "git": {
+                "commit": {
+                    "id": {"abbrev": "unknown"},
+                    "time": "unknown",
+                }
+            }
+        }
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        commit = value["git"]["commit"]
+        abbreviation = commit["id"]["abbrev"]
+        commit_time = commit["time"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"Invalid build information in {path}") from exc
+    if not isinstance(abbreviation, str) or not abbreviation:
+        raise RuntimeError(f"Invalid Git commit abbreviation in {path}")
+    if not isinstance(commit_time, str) or not commit_time:
+        raise RuntimeError(f"Invalid Git commit time in {path}")
+    return {
+        "git": {
+            "commit": {
+                "id": {"abbrev": abbreviation},
+                "time": commit_time,
+            }
+        }
+    }
+
+
+BUILD_INFO = _load_build_info(Path(__file__).with_name("build-info.json"))
+
+
 class ExtractionResponse(BaseModel):
     """Portable extraction artifacts returned without server-side state."""
 
@@ -94,6 +129,32 @@ class ChunkResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Readiness response used by containers and Kubernetes probes."""
 
+    status: str
+
+
+class GitCommitId(BaseModel):
+    """Abbreviated Git identity for the source revision in the image."""
+
+    abbrev: str
+
+
+class GitCommit(BaseModel):
+    """Git revision and commit time captured while building the image."""
+
+    id: GitCommitId
+    time: str
+
+
+class GitInformation(BaseModel):
+    """Git metadata included in the service build."""
+
+    commit: GitCommit
+
+
+class StatusResponse(BaseModel):
+    """Service status together with immutable build information."""
+
+    git: GitInformation
     status: str
 
 
@@ -131,6 +192,12 @@ async def _save_pdf_upload(upload: UploadFile, target: Path) -> None:
 async def health() -> HealthResponse:
     """Report that the process is ready to accept requests."""
     return HealthResponse(status="ok")
+
+
+@app.get("/status", response_model=StatusResponse, tags=["operations"])
+async def status() -> StatusResponse:
+    """Report service availability and the Git revision used for this build."""
+    return StatusResponse(git=BUILD_INFO["git"], status="UP")
 
 
 @app.post("/v1/extract", response_model=ExtractionResponse, tags=["library"])
