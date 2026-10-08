@@ -20,7 +20,7 @@ from .blocks import (
 
 
 Progress = Callable[[str], None]
-PDF_CORPUS_VERSION = "v14-image-card-sections"
+PDF_CORPUS_VERSION = "v16-unruled-code-table-continuations"
 
 _GROUPED_NUMBER = re.compile(r"(?<!\w)(\d{1,3}(?:[\s\u00a0]\d{3})+)(?!\w)")
 
@@ -375,6 +375,88 @@ def _words_in_box(words: Sequence[dict], box: tuple[float, float, float, float])
         if x0 <= _word_center(word)[0] <= x1
         and top <= _word_center(word)[1] <= bottom
     ]
+
+
+_TABLE_CODE_PATTERN = re.compile(r"[A-Z][A-Z0-9]{3,11}")
+
+
+def _unruled_code_rows_below_table(
+    words: Sequence[dict],
+    columns: Sequence[float],
+    table_box: tuple,
+    table_boxes: Sequence[tuple],
+) -> list[tuple[float, list[str], list[dict]]]:
+    """Recover code-led rows below a ruled header or partial table.
+
+    Some brochures draw a complete grid only around the table header or its
+    first rows. Later rows keep the same column alignment but have no horizontal
+    or vertical rules, so ``pdfplumber`` leaves them outside the detected table.
+    When another detected table marks the lower boundary, leading code tokens in
+    the first column identify the missing logical rows.
+    """
+    if len(columns) < 3:
+        return []
+    table_left, table_top, table_right, table_bottom = map(float, table_box)
+    header_words = _words_in_box(
+        words, (table_left, table_top, table_right, table_bottom)
+    )
+    if not any(
+        clean_text(word.get("text", "")).casefold() in {"code", "kod", "kód"}
+        for word in header_words
+    ):
+        return []
+
+    lower_boundaries = [
+        float(box[1])
+        for box in table_boxes
+        if tuple(box) != tuple(table_box)
+        and float(box[1]) > table_bottom + 1.0
+        and max(table_left, float(box[0])) < min(table_right, float(box[2]))
+    ]
+    if not lower_boundaries:
+        return []
+    lower_limit = min(lower_boundaries)
+
+    anchors = sorted(
+        (
+            word
+            for word in words
+            if table_bottom <= _word_center(word)[1] < lower_limit
+            and columns[0] <= _word_center(word)[0] <= columns[1]
+            and _TABLE_CODE_PATTERN.fullmatch(
+                clean_text(word.get("text", "")).upper()
+            )
+        ),
+        key=lambda word: _word_center(word)[1],
+    )
+    if not anchors:
+        return []
+
+    anchor_centers = [_word_center(word)[1] for word in anchors]
+    boundaries = [table_bottom]
+    boundaries.extend(
+        (left + right) / 2
+        for left, right in zip(anchor_centers, anchor_centers[1:])
+    )
+    boundaries.append(lower_limit)
+
+    result: list[tuple[float, list[str], list[dict]]] = []
+    for position, anchor in enumerate(anchors):
+        row_top = boundaries[position]
+        row_bottom = boundaries[position + 1]
+        cell_words = [
+            _words_in_box(
+                words,
+                (columns[index], row_top, columns[index + 1], row_bottom),
+            )
+            for index in range(len(columns) - 1)
+        ]
+        values = [_positioned_words_text(cell) for cell in cell_words]
+        if sum(bool(value) for value in values) < 2:
+            continue
+        selected = [word for cell in cell_words for word in cell]
+        result.append((float(anchor["top"]), values, selected))
+    return result
 
 
 def _positioned_words_text(words: Sequence[dict]) -> str:
@@ -1402,6 +1484,19 @@ def _reconstruct_pdf_table(
             elif populated:
                 section_rows.append((row_top, populated[0]))
 
+    extended_rows = _unruled_code_rows_below_table(
+        words,
+        columns,
+        tuple(table.bbox),
+        table_boxes,
+    )
+    for row_top, values, selected_words in extended_rows:
+        rows.append(values)
+        row_positions.append(row_top)
+        consumed_words.update(_word_key(word) for word in selected_words)
+    if extended_rows and reconstruction_info is not None:
+        reconstruction_info["extended_unruled_rows"] = True
+
     label_value_grid = _reconstruct_label_value_grid(
         table,
         words,
@@ -1482,6 +1577,9 @@ def _reconstruct_pdf_table(
         candidate = rows[0]
         populated = sum(bool(value) for value in candidate)
         required = max(2, (3 * len(headers) + 3) // 4)
+        explicit_code_header = bool(candidate) and clean_text(
+            candidate[0]
+        ).casefold() in {"code", "kod", "kód"}
         compact_header = (
             populated >= required
             and sum(
@@ -1494,7 +1592,7 @@ def _reconstruct_pdf_table(
         )
         should_promote = (
             populated >= required and generic_headers * 2 >= len(headers)
-        ) or (prose_external_headers and compact_header)
+        ) or (prose_external_headers and compact_header) or explicit_code_header
         if should_promote:
             promoted_top = row_positions[0]
             headers = [
@@ -1703,6 +1801,11 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
             ]
             positioned: list[tuple[float, dict]] = []
             for card_number, section in enumerate(card_sections, start=1):
+                if not any(
+                    any(clean_text(cell) for cell in row)
+                    for row in section["rows"]
+                ):
+                    continue
                 block = make_table_block(
                     ["Label", "Value"],
                     section["rows"],
@@ -1773,7 +1876,9 @@ def extract_pdf_blocks(path: Path, progress: Progress | None = None) -> tuple[li
                     key=lambda item: item[0],
                 )
                 caption = caption_source[1]
-                if rows:
+                if headers and any(
+                    any(clean_text(cell) for cell in row) for row in rows
+                ):
                     block = make_table_block(
                         headers,
                         rows,

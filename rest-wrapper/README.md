@@ -1,10 +1,12 @@
 # REST wrapper
 
-This directory wraps the two primary library operations in a stateless FastAPI
+This directory wraps the primary library operations in a stateless FastAPI
 service:
 
 - `POST /v1/extract` accepts PDF uploads or, when explicitly enabled, HTML URLs;
-- `POST /v1/chunks` accepts the returned `blocks` and creates chunks; and
+- `POST /v1/chunks` accepts the returned `blocks` and creates chunks;
+- `POST /v1/model-year-options` accepts previously extracted brochure blocks
+  and returns linked, schema-compatible versions and options;
 - `GET /status` reports service availability and build-time Git information;
 - `GET /health` supports container and Kubernetes health probes.
 
@@ -68,6 +70,54 @@ curl -X POST http://localhost:8000/v1/chunks \
   -H "Content-Type: application/json" \
   --data-binary @chunk-request.json
 ```
+
+## Extract model-year options
+
+Pass the `blocks` returned by `POST /v1/extract` to the model-year endpoint.
+This keeps option generation as a second step and avoids parsing the brochure
+PDF again. The request body has this form:
+
+```json
+{
+  "blocks": [],
+  "source_name": "astra1.pdf",
+  "profile": "auto",
+  "name": null,
+  "valid_from": null
+}
+```
+
+Save a populated request as `model-year-options-request.json`, then call:
+
+```bash
+curl -X POST http://localhost:8000/v1/model-year-options \
+  -H "Content-Type: application/json" \
+  --data-binary @model-year-options-request.json \
+  -o astra1_brochure_options_linked.json
+```
+
+The service currently supports the approved Opel Astra MY26B layout and detects
+it when `profile` is `auto`. It returns an error for an unsupported layout.
+The optional `source_name` is normally unnecessary because it is inferred from
+the blocks. Set `profile`, `name`, or `valid_from` in the JSON body to override
+the inferred values. An optional JSON Schema can be embedded under `schema`:
+
+```json
+{
+  "blocks": [],
+  "profile": "opel-astra-my26",
+  "name": "Astra MY26B",
+  "valid_from": "2026-06-01T00:00:00+02:00",
+  "schema": {
+    "type": "object",
+    "required": ["versions", "options"]
+  }
+}
+```
+
+When `schema` is supplied, the generated response is validated before it is
+returned. The response itself is the model-year JSON object. This endpoint
+does not upload or store the PDF and does not rerun extraction.
 
 ## Run as a container
 
@@ -146,7 +196,9 @@ kubectl apply -f rest-wrapper/kubernetes.yaml
 
 Other pods in the same namespace can call
 `http://table-aware-chunker:8000/v1/extract` and
-`http://table-aware-chunker:8000/v1/chunks`. Build information is available at
+`http://table-aware-chunker:8000/v1/chunks`. They can send previously extracted
+blocks to `http://table-aware-chunker:8000/v1/model-year-options`. Build
+information is available at
 `http://table-aware-chunker:8000/status`.
 
 ## Configuration and security

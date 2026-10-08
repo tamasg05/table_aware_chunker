@@ -188,11 +188,25 @@ construction.
     surrounding punctuation. When a particular row has an empty cell, that
     column is omitted from the row's serialized representations instead of
     producing an empty `column = value` assignment.
-15. Expose extraction and chunking through an optional stateless REST service,
-    allowing applications without a Python runtime to use the library over
-    HTTP. Its `/status` endpoint reports availability together with the Git
-    commit and commit time captured when the Docker image was built.
-16. Perform extraction and chunking without AI models or model API calls.
+15. **Extract brochure options from saved blocks.** For the supported Opel
+    Astra MY26B layout, convert a previously generated `blocks.json` into
+    schema-compatible vehicle versions and orderable options. The result covers
+    standard and optional equipment, colors, upholstery, wheels, accessories,
+    option codes, descriptions, prices, and availability per version. This
+    second-stage operation is available through Python, the command line, and
+    the REST wrapper without parsing the PDF again.
+16. Assign deterministic identifiers to options in an already extracted
+    model-year JSON document. Every option must contain one status entry per
+    version in the same order as the `versions` array, providing a positional
+    relationship without adding version or status IDs. Missing version codes are
+    derived from version marketing names.
+17. Expose extraction, model-year option generation, and chunking through an
+    optional stateless REST service, allowing applications without a Python
+    runtime to use the library over HTTP. Its `/status` endpoint reports
+    availability together with the Git commit and commit time captured when the
+    Docker image was built.
+18. Perform extraction, linking, validation, and chunking without AI models or
+    model API calls.
 
 ## Installation
 
@@ -278,6 +292,74 @@ python .\examples\extract_and_chunk_pdf.py .\path\to\document.pdf `
     --output-directory .\another_output_directory
 ```
 
+### Extracting model-year versions and options from a brochure
+
+`build_model_year_options_from_blocks()` performs the second stage of the
+workflow for a supported brochure. It accepts the blocks already produced by
+the extraction stage, identifies the vehicle versions, converts brochure
+equipment into schema-compatible options, creates the positional
+version-status matrix, and assigns deterministic option identifiers. Reusing
+`blocks.json` avoids repeating PDF parsing and table reconstruction.
+
+The runnable command-line example accepts `blocks.json` and an output path. It
+can optionally validate the generated document against a JSON Schema:
+
+```powershell
+python .\examples\extract_model_year_options.py `
+    .\example_output\corpus-id\blocks.json `
+    .\astra1_brochure_options_linked.json `
+    --schema .\path\to\json_schema.json
+```
+
+The original brochure filename is normally inferred from the `source_name`
+stored in the blocks. `--source-name` can override it when processing blocks
+created by another system.
+
+The default `auto` profile currently recognizes the approved Opel Astra MY26B
+layout. `--profile opel-astra-my26` selects it explicitly. Optional `--name` and
+`--valid-from` arguments override metadata when it cannot be determined from a
+future brochure edition. Unsupported layouts are rejected with a descriptive
+error instead of being interpreted as Astra data.
+
+The lower-level Python convenience function `extract_model_year_options()` is
+still available for callers that specifically want a one-step PDF workflow. It
+first creates blocks with the current parser and therefore reruns extraction.
+For the usual two-stage workflow, create `blocks.json` with a parser version
+that includes required fixes such as
+`v16-unruled-code-table-continuations`, then pass those saved blocks to the
+blocks-based function, command-line example, or REST endpoint.
+
+Most values come from the extracted text and tables. The charging-equipment
+table is stored as a full-page image in this brochure and has no PDF text layer,
+so its three visible product rows are explicitly represented by the Astra
+layout profile. No AI model or external reference data is used.
+
+### Linking an existing model-year JSON document
+
+`link_model_year_options()` accepts an already extracted model-year dictionary
+containing `versions` and `options`. It assigns one-based option identifiers in
+their existing order and removes version, `versionData`, and `versionStatus`
+IDs. Each option must contain exactly one `versionStatus` entry per version. The
+entry at index 0 belongs to the version at index 0, the entry at index 1 belongs
+to the version at index 1, and so on. The input dictionary is not modified.
+
+The runnable `examples/link_model_year_options.py` example performs the same
+operation on JSON files. Pass the schema when the output must be validated
+before it is saved:
+
+```powershell
+python .\examples\link_model_year_options.py `
+    .\draft_model_year.json `
+    .\linked_model_year.json `
+    --schema .\json_schema.json
+```
+
+Existing non-empty `versionData.versionCode` values are retained. Otherwise,
+stable codes are derived from the version marketing names. Explicit codes can
+instead be supplied by repeating `--version-code` once for every version. This
+lower-level operation remains useful when another process has already created
+the `versions` and `options` arrays.
+
 ### Calling the example from Java
 
 `examples/TableExtractionExample.java` demonstrates how a Java application can
@@ -303,7 +385,9 @@ that virtual environment as described under [Installation](#installation).
 ## REST Wrapper
 
 The `rest-wrapper` directory provides a stateless FastAPI wrapper around
-`extract_corpus()` and `build_chunks()`. FastAPI is a Python framework for
+`extract_corpus()`, `build_model_year_options_from_blocks()`, and
+`build_chunks()`.
+FastAPI is a Python framework for
 building HTTP APIs; here, it exposes the library's Python operations as REST
 endpoints that other applications can call over the network. This allows
 applications without a Python runtime to upload PDFs and create

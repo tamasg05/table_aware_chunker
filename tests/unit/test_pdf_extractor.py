@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from table_aware_chunker.pdf_extractor import (
     _clean_pdf_table,
@@ -84,6 +84,65 @@ class PdfExtractorTests(unittest.TestCase):
 
         self.assertEqual(sections, [])
 
+    def test_empty_image_card_section_is_not_serialized_as_a_table(self):
+        fake_page = SimpleNamespace(
+            dedupe_chars=lambda: fake_page,
+            find_tables=lambda: [],
+            extract_words=lambda **_: [],
+            images=[],
+            rects=[],
+            width=300,
+        )
+        fake_document = MagicMock()
+        fake_document.pages = [fake_page]
+        fake_document.__enter__.return_value = fake_document
+        empty_section = {
+            "caption": "Available accessories",
+            "rows": [["", "  "]],
+            "bbox": (0, 0, 100, 100),
+            "suppression_bbox": (0, 0, 100, 100),
+            "consumed_words": set(),
+            "top": 0,
+        }
+
+        with (
+            patch("pdfplumber.open", return_value=fake_document),
+            patch(
+                "table_aware_chunker.pdf_extractor._image_card_sections",
+                return_value=[empty_section],
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "No readable text"):
+                from table_aware_chunker.pdf_extractor import extract_pdf_blocks
+
+                extract_pdf_blocks(Path("empty.pdf"))
+
+    def test_empty_detected_table_is_not_serialized(self):
+        empty_table = SimpleNamespace(bbox=(0, 0, 100, 100))
+        fake_page = SimpleNamespace(
+            dedupe_chars=lambda: fake_page,
+            find_tables=lambda: [empty_table],
+            extract_words=lambda **_: [],
+            images=[],
+            rects=[],
+            width=300,
+        )
+        fake_document = MagicMock()
+        fake_document.pages = [fake_page]
+        fake_document.__enter__.return_value = fake_document
+
+        with (
+            patch("pdfplumber.open", return_value=fake_document),
+            patch(
+                "table_aware_chunker.pdf_extractor._reconstruct_pdf_table",
+                return_value=([], [["", ""]], [], set()),
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "No readable text"):
+                from table_aware_chunker.pdf_extractor import extract_pdf_blocks
+
+                extract_pdf_blocks(Path("empty.pdf"))
+
     def test_reconstruction_removes_empty_internal_spacer_columns(self):
         boundaries = (0, 20, 24, 44, 48, 68, 72, 92)
         table = SimpleNamespace(
@@ -121,6 +180,64 @@ class PdfExtractorTests(unittest.TestCase):
         self.assertEqual(sections, [])
         self.assertTrue(reconstruction_info["removed_empty_columns"])
         self.assertTrue(reconstruction_info["promoted_internal_header"])
+
+    def test_reconstruction_extends_code_rows_below_a_ruled_header(self):
+        table = SimpleNamespace(
+            bbox=(0, 20, 100, 40),
+            rows=[
+                SimpleNamespace(
+                    cells=[
+                        (0, 20, 20, 30),
+                        (20, 20, 70, 30),
+                        (70, 20, 100, 30),
+                    ]
+                ),
+                SimpleNamespace(
+                    cells=[
+                        (0, 30, 20, 40),
+                        (20, 30, 70, 40),
+                        (70, 30, 100, 40),
+                    ]
+                ),
+            ],
+        )
+        words = [
+            word("Previous", 2, 5, 17, 11),
+            word("content", 24, 5, 46, 11),
+            word("price", 74, 5, 90, 11),
+            word("Kód", 2, 32, 14, 38),
+            word("Option", 24, 32, 46, 38),
+            word("Edition", 74, 32, 96, 38),
+            word("First", 24, 42, 38, 48),
+            word("A100", 2, 50, 16, 56),
+            word("100", 74, 50, 84, 56),
+            word("Ft", 86, 50, 92, 56),
+            word("continuation", 24, 54, 58, 60),
+            word("Second", 24, 63, 45, 69),
+            word("B200", 2, 70, 16, 76),
+            word("200", 74, 70, 84, 76),
+            word("Ft", 86, 70, 92, 76),
+        ]
+        reconstruction_info: dict[str, object] = {}
+
+        headers, rows, sections, consumed = _reconstruct_pdf_table(
+            table,
+            words,
+            table_boxes=[table.bbox, (0, 80, 100, 90)],
+            reconstruction_info=reconstruction_info,
+        )
+
+        self.assertEqual(headers, ["Kód", "Option", "Edition"])
+        self.assertEqual(
+            rows,
+            [
+                ["A100", "First continuation", "100 Ft"],
+                ["B200", "Second", "200 Ft"],
+            ],
+        )
+        self.assertEqual(sections, [])
+        self.assertIn("A100", {key[0] for key in consumed})
+        self.assertTrue(reconstruction_info["extended_unruled_rows"])
 
     def test_reconstruction_attaches_labeled_multi_column_section(self):
         boundaries = (0, 30, 35, 65, 70, 100)

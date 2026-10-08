@@ -12,7 +12,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from table_aware_chunker import build_chunks, extract_corpus
+from table_aware_chunker import (
+    JsonSchemaValidationError,
+    ModelYearDataError,
+    build_chunks,
+    build_model_year_options_from_blocks,
+    extract_corpus,
+    validate_json_schema,
+)
 
 
 def _positive_environment_integer(name: str, default: int) -> int:
@@ -126,6 +133,30 @@ class ChunkResponse(BaseModel):
     chunks: list[dict[str, Any]]
 
 
+class ModelYearOptionsRequest(BaseModel):
+    """Extracted brochure blocks and model-year generation options."""
+
+    blocks: list[dict[str, Any]]
+    source_name: str | None = None
+    profile: str = "auto"
+    name: str | None = None
+    valid_from: str | None = None
+    schema_definition: dict[str, Any] | None = Field(
+        default=None,
+        alias="schema",
+        description="Optional JSON Schema used to validate the response",
+    )
+
+
+class ModelYearOptionsResponse(BaseModel):
+    """Schema-compatible versions and options extracted from one brochure."""
+
+    name: str | None = None
+    validFrom: str | None = None
+    versions: list[dict[str, Any]]
+    options: list[dict[str, Any]]
+
+
 class HealthResponse(BaseModel):
     """Readiness response used by containers and Kubernetes probes."""
 
@@ -163,7 +194,8 @@ app = FastAPI(
     version="1.0.0",
     description=(
         "Stateless HTTP access to table-aware PDF/HTML extraction and "
-        "structure-preserving chunking."
+        "structure-preserving chunking, plus model-year option generation "
+        "from extracted brochure blocks."
     ),
 )
 
@@ -317,3 +349,35 @@ async def chunks_endpoint(request: ChunkRequest) -> ChunkResponse:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ChunkResponse(count=len(chunks), chunks=chunks)
+
+
+@app.post(
+    "/v1/model-year-options",
+    response_model=ModelYearOptionsResponse,
+    tags=["library"],
+)
+async def model_year_options_endpoint(
+    request: ModelYearOptionsRequest,
+) -> ModelYearOptionsResponse:
+    """Build linked versions and options from previously extracted blocks."""
+    try:
+        result = await run_in_threadpool(
+            lambda: build_model_year_options_from_blocks(
+                request.blocks,
+                source_name=request.source_name,
+                profile=request.profile,
+                name=request.name,
+                valid_from=request.valid_from,
+            )
+        )
+        if request.schema_definition is not None:
+            await run_in_threadpool(
+                lambda: validate_json_schema(
+                    result, request.schema_definition
+                )
+            )
+    except (ModelYearDataError, JsonSchemaValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ModelYearOptionsResponse(**result)

@@ -33,6 +33,20 @@ from .chunking import (
     chunk_words,
     tokenize_words,
 )
+from .brochure_model_year import (
+    ASTRA_PROFILE,
+    build_model_year_options_file,
+    build_model_year_options_from_blocks,
+    extract_model_year_options,
+)
+from .model_year import (
+    JsonSchemaValidationError,
+    ModelYearDataError,
+    link_model_year_options,
+    link_model_year_options_file,
+    validate_json_schema,
+    validate_model_year_links,
+)
 
 
 Progress = Callable[[str], None]
@@ -120,18 +134,26 @@ def extract_corpus(
 
 
 __all__ = [
+    "ASTRA_PROFILE",
     "BLOCKS_SCHEMA_VERSION",
     "CHUNKS_SCHEMA_VERSION",
     "STRUCTURED_CORPUS_VERSION",
     "BlockValidationError",
+    "JsonSchemaValidationError",
+    "ModelYearDataError",
     "SavedStructuredCorpus",
     "associate_table_headings",
     "clean_text",
     "build_chunks",
+    "build_model_year_options_file",
+    "build_model_year_options_from_blocks",
     "chunk_structured_blocks",
     "chunk_words",
     "extract_corpus",
+    "extract_model_year_options",
     "load_structured_blocks",
+    "link_model_year_options",
+    "link_model_year_options_file",
     "make_table_block",
     "make_text_block",
     "render_block",
@@ -139,4 +161,6 @@ __all__ = [
     "save_structured_corpus",
     "tokenize_words",
     "validate_blocks",
+    "validate_json_schema",
+    "validate_model_year_links",
 ]

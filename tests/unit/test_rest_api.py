@@ -246,6 +246,121 @@ class RestApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertIn("either PDF files or HTML URLs", response.json()["detail"])
 
+    def test_model_year_options_endpoint_returns_portable_json(self):
+        blocks = [
+            {
+                "type": "paragraph",
+                "text": "Astra brochure blocks",
+                "source_name": "astra.pdf",
+                "page": 1,
+                "heading_path": [],
+            }
+        ]
+        generated = {
+            "name": "Astra MY26B",
+            "validFrom": "2026-06-01T00:00:00+02:00",
+            "versions": [
+                {
+                    "versionData": {
+                        "marketingName": "Astra Edition Hybrid",
+                        "versionCode": "EDITION_HYBRID_145_AT6",
+                    }
+                }
+            ],
+            "options": [
+                {
+                    "id": 1,
+                    "marketingName": "Multimedia Navi infotainment csomag",
+                    "optionCode": "DZJG9",
+                    "type": "OPTION",
+                    "versionStatus": [
+                        {"status": "OPTION", "priceGross": 220000.0}
+                    ],
+                }
+            ],
+        }
+
+        def fake_model_year(received_blocks, **options):
+            self.assertEqual(received_blocks, blocks)
+            self.assertIsNone(options["source_name"])
+            self.assertEqual(options["profile"], "opel-astra-my26")
+            self.assertEqual(options["name"], "Astra MY26B")
+            return generated
+
+        with patch.object(
+            self.rest_module,
+            "build_model_year_options_from_blocks",
+            side_effect=fake_model_year,
+        ):
+            response = self.request(
+                "POST",
+                "/v1/model-year-options",
+                json={
+                    "blocks": blocks,
+                    "profile": "opel-astra-my26",
+                    "name": "Astra MY26B",
+                    "schema": {
+                        "type": "object",
+                        "required": ["options"],
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), generated)
+
+    def test_model_year_options_endpoint_rejects_unsupported_blocks(self):
+        response = self.request(
+            "POST",
+            "/v1/model-year-options",
+            json={
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "text": "Unrelated brochure",
+                        "source_name": "sample.pdf",
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("No supported", response.json()["detail"])
+
+    def test_model_year_options_endpoint_requires_blocks(self):
+        response = self.request(
+            "POST", "/v1/model-year-options", json={"profile": "auto"}
+        )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_model_year_options_endpoint_rejects_schema_mismatch(self):
+        generated = {
+            "name": "Astra MY26B",
+            "validFrom": "2026-06-01T00:00:00+02:00",
+            "versions": [],
+            "options": [],
+        }
+        with patch.object(
+            self.rest_module,
+            "build_model_year_options_from_blocks",
+            return_value=generated,
+        ):
+            response = self.request(
+                "POST",
+                "/v1/model-year-options",
+                json={
+                    "blocks": [],
+                    "schema": {
+                        "type": "object",
+                        "required": ["missingField"],
+                    },
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("missingField", response.json()["detail"])
+
     def test_url_extraction_is_disabled_by_default(self):
         with patch.object(self.rest_module, "ALLOW_URL_SOURCES", False):
             response = self.request(
