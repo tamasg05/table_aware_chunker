@@ -96,9 +96,8 @@ def _representative_schema() -> dict:
             },
             "option": {
                 "type": "object",
-                "required": ["id", "type", "versionStatus"],
+                "required": ["type", "versionStatus"],
                 "properties": {
-                    "id": {"type": "integer"},
                     "marketingName": {"type": "string"},
                     "type": {"enum": ["OPTION", "COLOR"]},
                     "versionStatus": {
@@ -235,8 +234,10 @@ def _astra_blocks() -> list[dict]:
 class ModelYearLinkTests(unittest.TestCase):
     def test_links_options_without_mutating_input(self):
         draft = _draft_model_year()
+        draft["id"] = 91
         draft["versions"][0]["id"] = 91
         draft["versions"][0]["versionData"]["id"] = 91
+        draft["options"][0]["id"] = 91
         draft["options"][0]["versionStatus"][0]["id"] = 91
         original = deepcopy(draft)
 
@@ -251,8 +252,9 @@ class ModelYearLinkTests(unittest.TestCase):
             [item["versionData"]["versionCode"] for item in linked["versions"]],
             ["EDITION_HYBRID", "GS_DIESEL"],
         )
-        self.assertEqual([item["id"] for item in linked["options"]], [1, 2])
+        self.assertNotIn("id", linked)
         for option in linked["options"]:
+            self.assertNotIn("id", option)
             self.assertTrue(
                 all("id" not in status for status in option["versionStatus"])
             )
@@ -308,9 +310,9 @@ class ModelYearLinkTests(unittest.TestCase):
         ):
             link_model_year_options(draft)
 
-    def test_rejects_a_version_id_in_linked_output(self):
+    def test_rejects_an_option_id_in_linked_output(self):
         linked = link_model_year_options(_draft_model_year())
-        linked["versions"][0]["id"] = 1
+        linked["options"][0]["id"] = 1
 
         with self.assertRaisesRegex(ModelYearDataError, "must not contain id"):
             validate_model_year_links(linked)
@@ -349,6 +351,9 @@ class ModelYearLinkTests(unittest.TestCase):
     def test_builds_linked_options_from_supported_astra_blocks(self):
         result = build_model_year_options_from_blocks(_astra_blocks())
 
+        self.assertNotIn(
+            '"id":', json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        )
         self.assertEqual(result["name"], "Astra MY26B")
         self.assertEqual(result["validFrom"], "2026-06-01T00:00:00+02:00")
         self.assertEqual(len(result["versions"]), 9)

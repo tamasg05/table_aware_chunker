@@ -195,11 +195,11 @@ construction.
     option codes, descriptions, prices, and availability per version. This
     second-stage operation is available through Python, the command line, and
     the REST wrapper without parsing the PDF again.
-16. Assign deterministic identifiers to options in an already extracted
-    model-year JSON document. Every option must contain one status entry per
-    version in the same order as the `versions` array, providing a positional
-    relationship without adding version or status IDs. Missing version codes are
-    derived from version marketing names.
+16. Link options to versions by array position and remove all literal `id`
+    fields. Every option contains one status entry per version in the same
+    order as the `versions` array, so the relationship is preserved without
+    those fields. Missing version codes are derived from version marketing
+    names.
 17. Expose extraction, model-year option generation, and chunking through an
     optional stateless REST service, allowing applications without a Python
     runtime to use the library over HTTP. Its `/status` endpoint reports
@@ -298,7 +298,7 @@ python .\examples\extract_and_chunk_pdf.py .\path\to\document.pdf `
 workflow for a supported brochure. It accepts the blocks already produced by
 the extraction stage, identifies the vehicle versions, converts brochure
 equipment into schema-compatible options, creates the positional
-version-status matrix, and assigns deterministic option identifiers. Reusing
+version-status matrix, and removes all literal `id` fields. Reusing
 `blocks.json` avoids repeating PDF parsing and table reconstruction.
 
 The runnable command-line example accepts `blocks.json` and an output path. It
@@ -337,11 +337,10 @@ layout profile. No AI model or external reference data is used.
 ### Linking an existing model-year JSON document
 
 `link_model_year_options()` accepts an already extracted model-year dictionary
-containing `versions` and `options`. It assigns one-based option identifiers in
-their existing order and removes version, `versionData`, and `versionStatus`
-IDs. Each option must contain exactly one `versionStatus` entry per version. The
-entry at index 0 belongs to the version at index 0, the entry at index 1 belongs
-to the version at index 1, and so on. The input dictionary is not modified.
+containing `versions` and `options`. It removes every literal `id` field. Each
+option must contain exactly one `versionStatus` entry per version: the entry at
+index 0 belongs to the version at index 0, the entry at index 1 belongs to the
+version at index 1, and so on. The input dictionary is not modified.
 
 The runnable `examples/link_model_year_options.py` example performs the same
 operation on JSON files. Pass the schema when the output must be validated

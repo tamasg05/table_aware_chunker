@@ -11,8 +11,8 @@ from table_aware_chunker import link_model_year_options_file
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Assign option identifiers and positional version links to an "
-            "already extracted model-year options JSON document."
+            "Remove IDs and create positional version links in an already "
+            "extracted model-year options JSON document."
         )
     )
     parser.add_argument("input_json", type=Path, help="Draft model-year JSON file")

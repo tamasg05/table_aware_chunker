@@ -269,7 +269,6 @@ class RestApiTests(unittest.TestCase):
             ],
             "options": [
                 {
-                    "id": 1,
                     "marketingName": "Multimedia Navi infotainment csomag",
                     "optionCode": "DZJG9",
                     "type": "OPTION",

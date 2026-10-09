@@ -15,4 +15,5 @@ Thumbs.db
 example_output/
 tmp/
 *.class
-
+/*.json
+build-info.json

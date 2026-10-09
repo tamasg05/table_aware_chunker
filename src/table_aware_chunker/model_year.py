@@ -35,6 +35,29 @@ def _array(value: object, path: str) -> list[Any]:
     return value
 
 
+def _remove_id_fields(value: object) -> None:
+    """Remove literal ``id`` fields recursively from a JSON-compatible value."""
+    if isinstance(value, dict):
+        value.pop("id", None)
+        for child in value.values():
+            _remove_id_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            _remove_id_fields(child)
+
+
+def _reject_id_fields(value: object, path: str) -> None:
+    """Reject literal ``id`` fields anywhere in a linked document."""
+    if isinstance(value, dict):
+        if "id" in value:
+            raise ModelYearDataError(f"{path} must not contain id")
+        for key, child in value.items():
+            _reject_id_fields(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for position, child in enumerate(value):
+            _reject_id_fields(child, f"{path}[{position}]")
+
+
 def _version_code(value: str, fallback: str) -> str:
     """Convert a version name into a stable ASCII identifier."""
     normalized = unicodedata.normalize("NFKD", value)
@@ -87,6 +110,7 @@ def _version_codes(
 def validate_model_year_links(model_year: Mapping[str, Any]) -> None:
     """Verify version codes and positional option-to-version relationships."""
     document = _object(model_year, "model_year")
+    _reject_id_fields(document, "model_year")
     versions = _array(document.get("versions"), "versions")
     options = _array(document.get("options"), "options")
     if not versions:
@@ -95,15 +119,9 @@ def validate_model_year_links(model_year: Mapping[str, Any]) -> None:
     version_codes: list[str] = []
     for position, raw_version in enumerate(versions):
         version = _object(raw_version, f"versions[{position}]")
-        if "id" in version:
-            raise ModelYearDataError(f"versions[{position}] must not contain id")
         version_data = _object(
             version.get("versionData"), f"versions[{position}].versionData"
         )
-        if "id" in version_data:
-            raise ModelYearDataError(
-                f"versions[{position}].versionData must not contain id"
-            )
         version_code = version_data.get("versionCode")
         if not isinstance(version_code, str) or not version_code:
             raise ModelYearDataError(
@@ -114,15 +132,8 @@ def validate_model_year_links(model_year: Mapping[str, Any]) -> None:
     if len(set(version_codes)) != len(version_codes):
         raise ModelYearDataError("version codes must be unique")
 
-    option_ids: list[int] = []
     for option_position, raw_option in enumerate(options):
         option = _object(raw_option, f"options[{option_position}]")
-        option_id = option.get("id")
-        if not isinstance(option_id, int) or isinstance(option_id, bool):
-            raise ModelYearDataError(
-                f"options[{option_position}].id must be an integer"
-            )
-        option_ids.append(option_id)
         statuses = _array(
             option.get("versionStatus"),
             f"options[{option_position}].versionStatus",
@@ -133,18 +144,10 @@ def validate_model_year_links(model_year: Mapping[str, Any]) -> None:
                 f"{len(versions)} entries, found {len(statuses)}"
             )
         for status_position, raw_status in enumerate(statuses):
-            status = _object(
+            _object(
                 raw_status,
                 f"options[{option_position}].versionStatus[{status_position}]",
             )
-            if "id" in status:
-                raise ModelYearDataError(
-                    f"options[{option_position}].versionStatus[{status_position}] "
-                    "must not contain id"
-                )
-
-    if len(set(option_ids)) != len(option_ids):
-        raise ModelYearDataError("option ids must be unique")
 
 
 def link_model_year_options(
@@ -155,13 +158,13 @@ def link_model_year_options(
     """
     Link every option status to a version by its array position.
 
-    The returned document is a deep copy. Options receive one-based identifiers
-    in their existing display order, while version and status identifiers are
+    The returned document is a deep copy with every literal ``id`` field
     removed. Each option must have exactly one ``versionStatus`` entry per
     version in the same order as the ``versions`` array. Existing version codes
     are retained, while missing codes are derived from version marketing names.
     """
     linked = deepcopy(_object(model_year, "model_year"))
+    _remove_id_fields(linked)
     versions = _array(linked.get("versions"), "versions")
     options = _array(linked.get("options"), "options")
     if not versions:
@@ -173,31 +176,27 @@ def link_model_year_options(
     ]
     codes = _version_codes(version_objects, version_codes)
     for position, (version, code) in enumerate(zip(version_objects, codes)):
-        version.pop("id", None)
         version_data = _object(
             version.get("versionData"), f"versions[{position}].versionData"
         )
-        version_data.pop("id", None)
         version_data["versionCode"] = code
 
-    for option_id, raw_option in enumerate(options, start=1):
-        option = _object(raw_option, f"options[{option_id - 1}]")
-        option["id"] = option_id
+    for option_position, raw_option in enumerate(options):
+        option = _object(raw_option, f"options[{option_position}]")
         statuses = _array(
             option.get("versionStatus"),
-            f"options[{option_id - 1}].versionStatus",
+            f"options[{option_position}].versionStatus",
         )
         if len(statuses) != len(version_objects):
             raise ModelYearDataError(
-                f"options[{option_id - 1}].versionStatus must contain "
+                f"options[{option_position}].versionStatus must contain "
                 f"{len(version_objects)} entries, found {len(statuses)}"
             )
         for status_position, raw_status in enumerate(statuses):
-            status = _object(
+            _object(
                 raw_status,
-                f"options[{option_id - 1}].versionStatus[{status_position}]",
+                f"options[{option_position}].versionStatus[{status_position}]",
             )
-            status.pop("id", None)
 
     validate_model_year_links(linked)
     return linked
